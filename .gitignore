@@ -1,0 +1,7 @@
+.env
+*.spec
+__pycache__
+build
+dist
+fix*
+*.csv

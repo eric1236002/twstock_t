@@ -1,0 +1,3 @@
+# -*- coding: big5 -*-
+te=u'§s§s'
+print(te)
