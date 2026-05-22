@@ -10,7 +10,7 @@ _jobs: dict[int, dict] = {}
 _lock = threading.Lock()
 
 
-def _run(job_id: int) -> None:
+def _run(job_id: int, roc_year: int, seamon: int | None) -> None:
     job = _jobs[job_id]
     log_lines: list[str] = []
 
@@ -20,9 +20,7 @@ def _run(job_id: int) -> None:
             job["log"] = log_lines
 
     try:
-        out_csv = scraper.run_listed_scrape(log)
-        inserted = db.import_csv(out_csv) if out_csv.exists() else 0
-        log(f"匯入事件：新增 {inserted} 筆")
+        inserted = scraper.run_scrape(log, roc_year, seamon)
 
         with _lock:
             job["status"] = "success"
@@ -49,7 +47,12 @@ def _run(job_id: int) -> None:
             )
 
 
-def start_job() -> int:
+def start_job(roc_year: int | None = None, seamon: int | None = None) -> int:
+    """Start a scrape. Defaults to the current ROC month (ongoing use);
+    pass roc_year with seamon=None for a whole-year backfill."""
+    if roc_year is None:
+        roc_year, seamon = scraper.current_roc_month()
+
     with db.connect() as conn:
         cur = conn.execute("INSERT INTO scrape_jobs (status) VALUES ('running')")
         job_id = cur.lastrowid
@@ -63,7 +66,7 @@ def start_job() -> int:
         "rows_inserted": 0,
     }
 
-    threading.Thread(target=_run, args=(job_id,), daemon=True).start()
+    threading.Thread(target=_run, args=(job_id, roc_year, seamon), daemon=True).start()
     return job_id
 
 

@@ -8,11 +8,11 @@ Three standalone Python scrapers that pull Taiwanese securities filings and writ
 
 ## Scripts
 
-The listed-company scraper now lives **inside the web backend** at `web/scraper.py` (see Web app → Architecture). The standalone scripts below have been archived to `old/` (gitignored) as reference — they are no longer wired into anything.
+The 稿本 scraper now lives **inside the web backend** at `web/scraper.py` and covers **both 上市 (listed) and 上櫃 (OTC)** — they share the same TWSE endpoint, so the only difference is which codes are fed. The standalone scripts below have been archived to `old/` (gitignored) as reference — they are no longer wired into anything.
 
-- **`web/scraper.py`** — the live listed-company scraper. POSTs each code in `上市代碼/CODE.csv` to `https://doc.twse.com.tw/server-java/t57sb01`, runs 50 concurrent workers (`ThreadPoolExecutor`) with `tenacity` retry through the residential proxy, keeps `各類公司債(稿本)` / `增資發行(稿本)` rows, and writes `MM月data.csv` (`code, doc_type, ROC datetime`). Triggered via the `/api/scrape` endpoint.
-- **old/上市稿本.py** — the original standalone version `web/scraper.py` was ported from. Archived reference.
-- **old/上櫃稿本.py** — older OTC (`上櫃`) variant: single-threaded `requests`, sleep-every-10 throttle, no proxy/retries. Legacy reference.
+- **`web/scraper.py`** — the live scraper. `run_scrape(log, roc_year, seamon=None, markets=("listed","otc"))` POSTs each code (from `codes/listed.csv` + `codes/otc.csv`) to `https://doc.twse.com.tw/server-java/t57sb01` with 50 workers + `tenacity` retry through the proxy. `seamon=None` sends `seamon=""` → **the whole year in one request per code** (backfill); an int → that single month (ongoing use). Keeps rows whose 資料細節說明 contains 公司債/增資 (both `(稿本)` drafts and 生效 effective rows) and records 結案類型 / 電子檔案 / 上傳日期. Writes straight into `events` via `db.import_rows` — **no intermediate CSV**.
+- **`web/codes.py`** — refreshes the code lists from TWSE ISIN: `strMode=2` (上市: 股票+創新板) → `codes/listed.csv` (~1079), `strMode=4` (上櫃: 股票) → `codes/otc.csv` (~887). Excludes 認購(售)權證 / ETF / ETN / TDR / 特別股 / 受益證券. Run `python -m web.codes` or `POST /api/update-codes`.
+- **old/上市稿本.py** / **old/上櫃稿本.py** — the original standalone listed / OTC versions `web/scraper.py` was ported from. Both used the same endpoint. Archived reference.
 - **old/增資.py** — MOPS capital-increase scraper (`https://mops.twse.com.tw/mops/web/t05st02`), writes `YYYYMMDD{type}結果.xlsx` via openpyxl. **Encoded in Big5** — string literals/comments look like mojibake as UTF-8; preserve the Big5 bytes if editing. Not integrated into the web app.
 
 ## Common commands
@@ -47,13 +47,13 @@ The proxy URL is assembled as `http://{user}:{pass}@{host}:{port}` and passed to
 
 ## Inputs and outputs
 
-- Input codes: `上市代碼/CODE.csv` — one stock code per line, no header.
-- Output: `MM月data.csv` (UTF-8) in the working directory, three columns `[date, doc_type, file_id]` derived from columns 0, 5, 9 of the scraped table rows.
-- The `seamon` POST field is `current_month - 1` (intentional — the site indexes by the previous month for current-month filings). `year` is ROC year (`西元 - 1911`).
+- Input codes: `codes/listed.csv` (上市) + `codes/otc.csv` (上櫃) — one 4-digit code per line, no header, ASCII filenames, checked into git. Regenerate with `python -m web.codes`.
+- Output: scraped rows go **straight into the `events` table** (no CSV files anymore).
+- The doc endpoint takes `year` = ROC year (`西元 - 1911`) and `seamon`: an int = that month, **empty string `""` = the whole year in one request**. Scraped table columns: `[0]證券代號 [3]結案類型 [5]資料細節說明 [7]電子檔案 [9]上傳日期`.
 
 ## Web app (event browser + K-line backtest)
 
-There is a FastAPI app under `web/` that browses the scraper events, triggers the scraper from the UI, and overlays event markers on K-line charts with T+N return stats. Reads CSV output into SQLite (`twstock.db`), pulls price + chip data from FinMind.
+There is a FastAPI app under `web/` that browses the scraper events, triggers the scraper from the UI, and overlays event markers on K-line charts with T+N return stats. Scraped events go straight into SQLite (`twstock.db`); price + chip data come from FinMind.
 
 ```bash
 # Run the API + serve the bundled React frontend
@@ -69,21 +69,23 @@ cp frontend/bundle.html web/static/bundle.html
 
 ### Architecture
 
-- `web/db.py` — SQLite schema (`events`, `kline`, `institutional`, `margin`, `scrape_jobs`) and CSV import (ROC date → ISO).
+- `web/db.py` — SQLite schema + helpers. `events` columns: `code, market('listed'|'otc'), doc_type(=資料細節說明), case_status(結案類型), file_link(電子檔案), filed_at(上傳日期), source_month`, `UNIQUE(code, file_link)`. `import_rows()` inserts scraped rows (ROC→ISO, dedup); `rebuild_events()` DROP+CREATEs events (used when backfilling after a schema change). Tables: `events, kline, institutional, margin, scrape_jobs`.
+- `web/codes.py` — refreshes `codes/listed.csv` + `codes/otc.csv` from TWSE ISIN (see Scripts). `load_codes(markets)` returns `[(code, market), ...]` for the scraper.
 - `web/finmind.py` — FinMind REST client. Reads `FINMIND_TOKENS` (comma-separated) from `.env`; picks the least-used non-exhausted token each request; on `402`/`401` marks token exhausted until next top of hour. `get_data(dataset, **params)` is the only entry point. `quota_remaining()` aggregates usage.
 - `web/kline.py` — uses dataset `TaiwanStockPrice` (raw price; `TaiwanStockPriceAdj` 還原 needs Backer despite what the docs imply). Caches in `kline` table; only fetches the missing tail.
 - `web/chip.py` — `TaiwanStockInstitutionalInvestorsBuySell` + `TaiwanStockMarginPurchaseShortSale`. Aggregates institutional `buy - sell` per (foreign/trust/dealer) into the `institutional` table; stores `Margin/ShortSaleTodayBalance` per day.
 - `web/backtest.py` — anchor = first trading day **strictly after** `filed_at.date()`, T+0 uses that day's **open**; T+N uses the **close** N trading days later. Chip window = ±5 trading days around anchor.
-- `web/scraper.py` — the listed-company scraper, integrated in-process (ported from the standalone `上市稿本.py`). `run_listed_scrape(log)` POSTs each code in `上市代碼/CODE.csv` to the TWSE doc endpoint through the residential proxy (50 workers, tenacity retry, `verify=False`), writes `MM月data.csv`, and streams progress via the `log` callback.
-- `web/scraper_job.py` — runs `web/scraper.run_listed_scrape` in a background thread (no subprocess), buffers log lines in memory + `scrape_jobs`, imports the resulting `MM月data.csv` into `events` on success.
-- `web/app.py` — FastAPI; on startup runs `init_db()` and imports any `MM月data.csv` in repo root.
+- `web/scraper.py` — unified 上市+上櫃 scraper (see Scripts). `run_scrape(log, roc_year, seamon=None, markets)` → whole-year (seamon="") or single-month, writes straight to `events` via `db.import_rows`.
+- `web/scraper_job.py` — `start_job(roc_year=None, seamon=None)` runs `scraper.run_scrape` in a background thread (defaults to the current ROC month for ongoing use), buffers log lines in memory + `scrape_jobs`.
+- `web/app.py` — FastAPI; on startup runs `init_db()` only (no CSV import).
 - `frontend/` — React + TS + Vite + Tailwind + shadcn/ui. Bundled to a single `bundle.html` via `web-artifacts-builder` skill; FastAPI serves that at `/`.
 
 ### API surface
 
-- `GET /api/events?month=&code=&doc_type=` — filtered event rows
+- `GET /api/events?month=&code=&doc_type=` — filtered event rows (now include `market`, `case_status`, `file_link`)
 - `GET /api/events/summary` — distinct codes (with count + last filed), available months, doc_types
-- `POST /api/scrape` → `{job_id}`; `GET /api/scrape/{id}?since=N` for polling (returns log tail)
+- `POST /api/scrape?year=&month=` → `{job_id}` (no params = current ROC month; `year` only = whole-year backfill); `GET /api/scrape/{id}?since=N` for polling
+- `POST /api/update-codes` — refresh `codes/listed.csv` + `codes/otc.csv` from TWSE ISIN
 - `GET /api/kline/{code}?days=N`
 - `GET /api/backtest/{code}` — events + T+N returns + chip window aggregates + stats per doc_type
 - `GET /api/quota` — FinMind remaining requests across all tokens

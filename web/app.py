@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, chip, db, finmind, kline, scraper_job
+from . import backtest, chip, codes, db, finmind, kline, scraper_job
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -18,9 +18,6 @@ app = FastAPI(title="twstock 稿本爬蟲 + K 線回測")
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
-    inserted = db.import_all_csvs()
-    if inserted:
-        print(f"[startup] imported {inserted} new events from CSVs")
 
 
 @app.get("/api/events")
@@ -29,7 +26,10 @@ def list_events(
     code: str | None = None,
     doc_type: str | None = None,
 ):
-    sql = "SELECT id, code, doc_type, filed_at, source_month FROM events WHERE 1=1"
+    sql = (
+        "SELECT id, code, market, doc_type, case_status, file_link, filed_at, source_month "
+        "FROM events WHERE 1=1"
+    )
     args: list = []
     if month:
         sql += " AND source_month = ?"
@@ -68,9 +68,18 @@ def events_summary():
 
 
 @app.post("/api/scrape")
-def start_scrape():
-    job_id = scraper_job.start_job()
+def start_scrape(
+    year: int | None = Query(None, description="ROC year, e.g. 115; omit for current"),
+    month: int | None = Query(None, ge=1, le=12, description="ROC month; omit for whole year when year given"),
+):
+    # default (no params): current ROC month. year given + no month: whole-year backfill.
+    job_id = scraper_job.start_job(roc_year=year, seamon=month)
     return {"job_id": job_id}
+
+
+@app.post("/api/update-codes")
+def update_codes():
+    return codes.update_code_lists()
 
 
 @app.get("/api/scrape/{job_id}")
