@@ -8,6 +8,7 @@ export type EventRow = {
 
 export type Summary = {
   codes: { code: string; n: number; last_filed: string; name: string | null }[];
+  years: string[];
   months: string[];
   doc_types: string[];
 };
@@ -37,6 +38,23 @@ export type ChipDay = {
   total_net: number;
   margin_balance: number | null;
   short_balance: number | null;
+};
+
+export type CB = {
+  bond_code: string;
+  stock_code: string | null;
+  name: string;
+  conv_price: number | null;
+  conv_start: string | null;
+  conv_end: string | null;
+  issue_date: string | null;
+  maturity_date: string | null;
+  issue_amount: number | null;
+  outstanding_amount: number | null;
+  coupon_rate: number | null;
+  put_date: string | null;
+  put_price: number | null;
+  listing_status: string | null;
 };
 
 export type ReturnPoint = { date: string; close: number; return_pct: number };
@@ -97,8 +115,9 @@ async function j<T>(url: string, opts?: RequestInit): Promise<T> {
 
 export const api = {
   summary: () => j<Summary>("/api/events/summary"),
-  events: (params: { month?: string; code?: string; doc_type?: string } = {}) => {
+  events: (params: { year?: string; month?: string; code?: string; doc_type?: string } = {}) => {
     const qs = new URLSearchParams();
+    if (params.year) qs.set("year", params.year);
     if (params.month) qs.set("month", params.month);
     if (params.code) qs.set("code", params.code);
     if (params.doc_type) qs.set("doc_type", params.doc_type);
@@ -109,6 +128,7 @@ export const api = {
     j<{ code: string; data: Candle[] }>(`/api/kline/${code}?days=${days}`),
   chip: (code: string, days = 540) =>
     j<{ code: string; data: ChipDay[] }>(`/api/chip/${code}?days=${days}`),
+  cb: (code: string) => j<{ code: string; data: CB[] }>(`/api/cb/${code}`),
   backtest: (code: string) => j<Backtest>(`/api/backtest/${code}`),
   startScrape: () => j<{ job_id: number }>("/api/scrape", { method: "POST" }),
   scrapeJob: (id: number, since = 0) =>

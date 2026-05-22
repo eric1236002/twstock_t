@@ -4,9 +4,11 @@ import type { EventRow, Summary } from "@/lib/api";
 type Props = {
   summary: Summary | null;
   events: EventRow[];
+  year: string;
   month: string;
   docType: string;
   selectedCode: string | null;
+  onYear: (v: string) => void;
   onMonth: (v: string) => void;
   onDocType: (v: string) => void;
   onPickCode: (code: string) => void;
@@ -15,9 +17,11 @@ type Props = {
 export function Sidebar({
   summary,
   events,
+  year,
   month,
   docType,
   selectedCode,
+  onYear,
   onMonth,
   onDocType,
   onPickCode,
@@ -49,6 +53,23 @@ export function Sidebar({
   return (
     <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950">
       <div className="space-y-3 border-b border-slate-800 p-4">
+        <div>
+          <label className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">
+            年
+          </label>
+          <select
+            value={year}
+            onChange={(e) => onYear(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+          >
+            <option value="">全部</option>
+            {summary?.years.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">
             月份

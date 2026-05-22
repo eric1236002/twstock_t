@@ -69,12 +69,14 @@ cp frontend/bundle.html web/static/bundle.html
 
 ### Architecture
 
-- `web/db.py` — SQLite schema + helpers. `events` columns: `code, market('listed'|'otc'), doc_type(=資料細節說明), case_status(結案類型), file_link(電子檔案), filed_at(上傳日期), source_month`, `UNIQUE(code, file_link)`. `import_rows()` inserts scraped rows (ROC→ISO, dedup); `rebuild_events()` DROP+CREATEs events (used when backfilling after a schema change). Tables: `events, kline, institutional, margin, scrape_jobs`.
+- `web/db.py` — SQLite schema + helpers. `events` columns: `code, market('listed'|'otc'), doc_type(=資料細節說明), case_status(結案類型), file_link(電子檔案), filed_at(上傳日期), source_month`, `UNIQUE(code, file_link)`. `import_rows()` inserts scraped rows (ROC→ISO, dedup); `rebuild_events()` DROP+CREATEs events (used when backfilling after a schema change). Tables: `events, kline, institutional, margin, stock_names, cb, scrape_jobs`.
 - `web/codes.py` — refreshes `codes/listed.csv` + `codes/otc.csv` from TWSE ISIN (see Scripts). `load_codes(markets)` returns `[(code, market), ...]` for the scraper.
 - `web/finmind.py` — FinMind REST client. Reads `FINMIND_TOKENS` (comma-separated) from `.env`; picks the least-used non-exhausted token each request; on `402`/`401` marks token exhausted until next top of hour. `get_data(dataset, **params)` is the only entry point. `quota_remaining()` aggregates usage.
 - `web/kline.py` — uses dataset `TaiwanStockPrice` (raw price; `TaiwanStockPriceAdj` 還原 needs Backer despite what the docs imply). Caches in `kline` table; only fetches the missing tail.
 - `web/chip.py` — `TaiwanStockInstitutionalInvestorsBuySell` + `TaiwanStockMarginPurchaseShortSale`. Aggregates institutional `buy - sell` per (foreign/trust/dealer) into the `institutional` table; stores `Margin/ShortSaleTodayBalance` per day.
-- `web/backtest.py` — anchor = first trading day **strictly after** `filed_at.date()`, T+0 uses that day's **open**; T+N uses the **close** N trading days later. Chip window = ±5 trading days around anchor.
+- `web/cb.py` — 可轉換公司債 (CB) issuance data from the **TPEx open API** `bond_ISSBD5_data` (public, no auth, one request returns all listed CBs). `ensure_cb()` caches the snapshot in the `cb` table (refreshes once/day); `get_cb(code, active_only=True)` returns a stock's CBs (掛牌中 + 未到期). `conv_price` is the **發行時轉換價** (at issuance) — does NOT reflect later anti-dilution adjustments, and there is no free API for the adjusted/current price.
+- `web/names.py` — stock code → 中文股名, cached in `stock_names` from FinMind `TaiwanStockInfo` (one request). `ensure_names()` / `get_names(codes)`; surfaced via `/api/events/summary`.
+- `web/backtest.py` — anchor = first trading day **strictly after** `filed_at.date()`, T+0 uses that day's **open**; T+N uses the **close** N trading days later. Chip window = ±5 trading days around anchor. Stats are bucketed by `類別/狀態` (公司債|增資 / 稿本|生效).
 - `web/scraper.py` — unified 上市+上櫃 scraper (see Scripts). `run_scrape(log, roc_year, seamon=None, markets)` → whole-year (seamon="") or single-month, writes straight to `events` via `db.import_rows`.
 - `web/scraper_job.py` — `start_job(roc_year=None, seamon=None)` runs `scraper.run_scrape` in a background thread (defaults to the current ROC month for ongoing use), buffers log lines in memory + `scrape_jobs`.
 - `web/app.py` — FastAPI; on startup runs `init_db()` only (no CSV import).
@@ -83,7 +85,8 @@ cp frontend/bundle.html web/static/bundle.html
 ### API surface
 
 - `GET /api/events?month=&code=&doc_type=` — filtered event rows (now include `market`, `case_status`, `file_link`)
-- `GET /api/events/summary` — distinct codes (with count + last filed), available months, doc_types
+- `GET /api/events/summary` — distinct codes (with count + last filed + 中文股名 `name`), available months, doc_types
+- `GET /api/cb/{code}` — 流通中可轉債 (轉換價＋發行資訊) from TPEx ISSBD5; conversion-price lines on the K-line + info panel below
 - `POST /api/scrape?year=&month=` → `{job_id}` (no params = current ROC month; `year` only = whole-year backfill); `GET /api/scrape/{id}?since=N` for polling
 - `POST /api/update-codes` — refresh `codes/listed.csv` + `codes/otc.csv` from TWSE ISIN
 - `GET /api/kline/{code}?days=N`

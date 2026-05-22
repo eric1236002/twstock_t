@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Backtest, type Candle, type ChipDay, type EventRow, type Quota, type ScrapeJob, type Summary } from "@/lib/api";
+import { api, type Backtest, type Candle, type CB, type ChipDay, type EventRow, type Quota, type ScrapeJob, type Summary } from "@/lib/api";
 import { Header } from "@/components/Header";
 import { LogDrawer } from "@/components/LogDrawer";
 import { Sidebar } from "@/components/Sidebar";
 import { KlineChart, CHIP_LABELS, chartHeightForPanes, type ChipMode } from "@/components/KlineChart";
 import { EventsTable } from "@/components/EventsTable";
 import { StatsTable } from "@/components/StatsTable";
+import { CbPanel } from "@/components/CbPanel";
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [year, setYear] = useState("");
   const [month, setMonth] = useState("");
   const [docType, setDocType] = useState("");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chip, setChip] = useState<ChipDay[]>([]);
+  const [cb, setCb] = useState<CB[]>([]);
   const [chipPanes, setChipPanes] = useState<ChipMode[]>(["foreign", "trust", "short"]);
   const [backtest, setBacktest] = useState<Backtest | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -29,13 +32,13 @@ export default function App() {
   const refreshAll = useCallback(async () => {
     const [s, e, q] = await Promise.all([
       api.summary(),
-      api.events({ month, doc_type: docType }),
+      api.events({ year, month, doc_type: docType }),
       api.quota().catch(() => null),
     ]);
     setSummary(s);
     setEvents(e);
     setQuota(q);
-  }, [month, docType]);
+  }, [year, month, docType]);
 
   useEffect(() => {
     refreshAll().catch(console.error);
@@ -48,16 +51,19 @@ export default function App() {
     setDetailError(null);
     setCandles([]);
     setChip([]);
+    setCb([]);
     setBacktest(null);
     Promise.all([
       api.kline(selectedCode, 540),
       api.backtest(selectedCode),
       api.chip(selectedCode, 540),
+      api.cb(selectedCode),
     ])
-      .then(([k, b, c]) => {
+      .then(([k, b, c, cbRes]) => {
         setCandles(k.data);
         setBacktest(b);
         setChip(c.data);
+        setCb(cbRes.data);
       })
       .catch((err) => setDetailError(String(err)))
       .finally(() => {
@@ -119,9 +125,11 @@ export default function App() {
         <Sidebar
           summary={summary}
           events={events}
+          year={year}
           month={month}
           docType={docType}
           selectedCode={selectedCode}
+          onYear={setYear}
           onMonth={setMonth}
           onDocType={setDocType}
           onPickCode={setSelectedCode}
@@ -212,7 +220,12 @@ export default function App() {
                   events={eventsForSelected}
                   chip={chip}
                   chipPanes={chipPanes}
+                  cb={cb}
                 />
+              </div>
+
+              <div className="p-4 pb-0">
+                <CbPanel cb={cb} />
               </div>
 
               <div className="flex flex-col gap-4 p-4 xl:flex-row xl:items-start">

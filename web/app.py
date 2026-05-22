@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, chip, codes, db, finmind, kline, names, scraper_job
+from . import backtest, cb, chip, codes, db, finmind, kline, names, scraper_job
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -22,7 +22,8 @@ def _startup() -> None:
 
 @app.get("/api/events")
 def list_events(
-    month: str | None = Query(None, description="ROC source month 'MM'"),
+    year: str | None = Query(None, description="西元 year 'YYYY' (filed_at)"),
+    month: str | None = Query(None, description="source month 'MM'"),
     code: str | None = None,
     doc_type: str | None = None,
 ):
@@ -31,6 +32,9 @@ def list_events(
         "FROM events WHERE 1=1"
     )
     args: list = []
+    if year:
+        sql += " AND substr(filed_at,1,4) = ?"
+        args.append(year)
     if month:
         sql += " AND source_month = ?"
         args.append(month)
@@ -57,6 +61,9 @@ def events_summary():
                 "FROM events GROUP BY code ORDER BY last_filed DESC"
             )
         ]
+        years = [r["y"] for r in conn.execute(
+            "SELECT DISTINCT substr(filed_at,1,4) AS y FROM events ORDER BY y DESC"
+        )]
         months = [r["source_month"] for r in conn.execute(
             "SELECT DISTINCT source_month FROM events "
             "WHERE source_month IS NOT NULL ORDER BY source_month"
@@ -72,7 +79,7 @@ def events_summary():
         name_map = {}
     for c in codes:
         c["name"] = name_map.get(c["code"])
-    return {"codes": codes, "months": months, "doc_types": doc_types}
+    return {"codes": codes, "years": years, "months": months, "doc_types": doc_types}
 
 
 @app.post("/api/scrape")
@@ -143,6 +150,16 @@ def get_chip(code: str, days: int = Query(540, ge=30, le=365 * 5)):
     except finmind.FinMindError as e:
         raise HTTPException(502, f"FinMind error: {e}")
     return {"code": code, "data": chip.daily_series(code, start, end)}
+
+
+@app.get("/api/cb/{code}")
+def get_cb(code: str):
+    """流通中可轉債（轉換價 + 發行資訊），來源 TPEx ISSBD5。"""
+    try:
+        cb.ensure_cb()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"code": code, "data": cb.get_cb(code)}
 
 
 @app.get("/api/quota")

@@ -6,14 +6,16 @@ import {
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
+  LineStyle,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type ITextWatermarkPluginApi,
   type SeriesMarker,
   type Time,
 } from "lightweight-charts";
-import type { Candle, ChipDay, EventDetail } from "@/lib/api";
+import type { Candle, CB, ChipDay, EventDetail } from "@/lib/api";
 
 export type ChipMode = "foreign" | "trust" | "dealer" | "margin" | "short";
 
@@ -30,6 +32,7 @@ type Props = {
   events: EventDetail[];
   chip: ChipDay[];
   chipPanes: ChipMode[];
+  cb: CB[];
 };
 
 const RED = "#ef4444"; // 紅 = 漲 / 買超 (台股慣例)
@@ -88,7 +91,9 @@ function robustBound(bars: { value: number }[]): number {
   return Math.max(p95, 1);
 }
 
-export function KlineChart({ candles, events, chip, chipPanes }: Props) {
+const CB_LINE = "#a78bfa"; // 轉換價虛線（紫）
+
+export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -96,6 +101,7 @@ export function KlineChart({ candles, events, chip, chipPanes }: Props) {
   const chipSeriesRef = useRef<ISeriesApi<"Histogram" | "Line">[]>([]);
   const watermarkRef = useRef<ITextWatermarkPluginApi<Time>[]>([]);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const cbLinesRef = useRef<IPriceLine[]>([]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -105,6 +111,7 @@ export function KlineChart({ candles, events, chip, chipPanes }: Props) {
         background: { color: "#0b0f14" },
         textColor: "#cbd5e1",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: 14, // 放大全域字級 → 債/增 marker 文字更醒目（marker 無粗體選項）
         panes: { separatorColor: "#1e293b", separatorHoverColor: "#334155" },
       },
       grid: {
@@ -144,6 +151,7 @@ export function KlineChart({ candles, events, chip, chipPanes }: Props) {
       chipSeriesRef.current = [];
       watermarkRef.current = [];
       markersRef.current = null;
+      cbLinesRef.current = [];
     };
   }, []);
 
@@ -179,7 +187,7 @@ export function KlineChart({ candles, events, chip, chipPanes }: Props) {
         return {
           time: e.anchor_date as Time,
           position: effective ? "belowBar" : "aboveBar",
-          color: isIssue ? "#06b6d4" : "#f59e0b",
+          color: isIssue ? "#06b6d4" : "#fbf707",
           shape: effective ? "arrowUp" : "arrowDown",
           text: cat + (effective ? "效" : "稿"),
         };
@@ -187,6 +195,27 @@ export function KlineChart({ candles, events, chip, chipPanes }: Props) {
     markersRef.current?.setMarkers(markers);
     chartRef.current?.timeScale().fitContent();
   }, [candles, events]);
+
+  // 可轉債轉換價：每檔 CB 一條水平虛線（右軸標籤＝簡稱）。
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const l of cbLinesRef.current) series.removePriceLine(l);
+    cbLinesRef.current = [];
+    for (const b of cb) {
+      if (!b.conv_price || b.conv_price <= 0) continue;
+      cbLinesRef.current.push(
+        series.createPriceLine({
+          price: b.conv_price,
+          color: CB_LINE,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: b.name,
+        })
+      );
+    }
+  }, [cb]);
 
   // Chip sub-panes: one pane per entry, each = 買超 histogram + 庫存 line + 內建 pane 標籤.
   useEffect(() => {

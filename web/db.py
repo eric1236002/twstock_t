@@ -58,6 +58,21 @@ CREATE TABLE IF NOT EXISTS stock_names (
     name TEXT
 );
 
+CREATE TABLE IF NOT EXISTS cb (
+    bond_code TEXT PRIMARY KEY,   -- BondCode: CB 代號 (11011)
+    stock_code TEXT,              -- IssuerCode: 標的股票代號 (1101)
+    name TEXT,                    -- ShortName: 台泥一永
+    conv_price REAL,              -- 發行時轉換價 (Conversion/ExchangePriceAtIssuance)
+    conv_start DATE, conv_end DATE,
+    issue_date DATE, maturity_date DATE,
+    issue_amount REAL, outstanding_amount REAL,
+    coupon_rate REAL,
+    put_date DATE, put_price REAL,
+    listing_status TEXT,          -- 2=掛牌中
+    fetched_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_cb_stock ON cb(stock_code);
+
 CREATE TABLE IF NOT EXISTS scrape_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
