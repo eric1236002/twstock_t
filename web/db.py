@@ -1,7 +1,6 @@
 """SQLite schema and connection helpers."""
 from __future__ import annotations
 
-import csv
 import datetime as dt
 import re
 import sqlite3
@@ -14,11 +13,14 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
-    doc_type TEXT NOT NULL,
-    filed_at DATETIME NOT NULL,
+    market TEXT,                 -- 'listed' | 'otc'
+    doc_type TEXT NOT NULL,      -- 資料細節說明: 各類公司債(稿本)/各類公司債/增資發行(稿本)/...
+    case_status TEXT,            -- 結案類型: 尚未結案 / 生效 / ...
+    file_link TEXT,              -- 電子檔案: e.g. 202603_2330_B021.pdf
+    filed_at DATETIME NOT NULL,  -- 上傳日期
     source_month TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(code, doc_type, filed_at)
+    UNIQUE(code, file_link)
 );
 CREATE INDEX IF NOT EXISTS idx_events_code ON events(code);
 CREATE INDEX IF NOT EXISTS idx_events_filed_at ON events(filed_at);
@@ -51,6 +53,26 @@ CREATE TABLE IF NOT EXISTS margin (
     PRIMARY KEY (code, date)
 );
 
+CREATE TABLE IF NOT EXISTS stock_names (
+    code TEXT PRIMARY KEY,
+    name TEXT
+);
+
+CREATE TABLE IF NOT EXISTS cb (
+    bond_code TEXT PRIMARY KEY,   -- BondCode: CB 代號 (11011)
+    stock_code TEXT,              -- IssuerCode: 標的股票代號 (1101)
+    name TEXT,                    -- ShortName: 台泥一永
+    conv_price REAL,              -- 發行時轉換價 (Conversion/ExchangePriceAtIssuance)
+    conv_start DATE, conv_end DATE,
+    issue_date DATE, maturity_date DATE,
+    issue_amount REAL, outstanding_amount REAL,
+    coupon_rate REAL,
+    put_date DATE, put_price REAL,
+    listing_status TEXT,          -- 2=掛牌中
+    fetched_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_cb_stock ON cb(stock_code);
+
 CREATE TABLE IF NOT EXISTS scrape_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -74,6 +96,13 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
 
 
+def rebuild_events() -> None:
+    """DROP + CREATE the events table (used when the schema changes / backfilling)."""
+    with connect() as conn:
+        conn.execute("DROP TABLE IF EXISTS events")
+        conn.executescript(SCHEMA)
+
+
 def roc_to_iso(roc: str) -> str | None:
     """Convert '115/04/23 11:04:40' (ROC year) → '2026-04-23 11:04:40'."""
     m = re.match(r"\s*(\d{2,3})/(\d{1,2})/(\d{1,2})(?:\s+(\d{2}):(\d{2}):(\d{2}))?", roc)
@@ -87,32 +116,30 @@ def roc_to_iso(roc: str) -> str | None:
     return f"{y:04d}-{mo:02d}-{d:02d} 00:00:00"
 
 
-def import_csv(csv_path: Path, source_month: str | None = None) -> int:
-    """Import a scraper CSV (code, doc_type, ROC datetime). Returns rows inserted."""
-    if source_month is None:
-        m = re.match(r"(\d{2})月", csv_path.name)
-        source_month = m.group(1) if m else None
+def import_rows(rows: list[dict]) -> int:
+    """Insert scraped event rows directly. Each row dict has keys:
+    code, market, doc_type, case_status, file_link, filed_at (ROC datetime string).
+    Returns rows newly inserted (dedup by UNIQUE(code, file_link))."""
     inserted = 0
-    with connect() as conn, csv_path.open("r", encoding="utf-8") as f:
-        for row in csv.reader(f):
-            if len(row) < 3:
+    with connect() as conn:
+        for r in rows:
+            filed_iso = roc_to_iso(r.get("filed_at", ""))
+            if not filed_iso:
                 continue
-            code, doc_type, roc = row[0].strip(), row[1].strip(), row[2].strip()
-            filed_at = roc_to_iso(roc)
-            if not filed_at:
-                continue
+            source_month = filed_iso[5:7]  # MM
             cur = conn.execute(
-                "INSERT OR IGNORE INTO events (code, doc_type, filed_at, source_month) "
-                "VALUES (?, ?, ?, ?)",
-                (code, doc_type, filed_at, source_month),
+                "INSERT OR IGNORE INTO events "
+                "(code, market, doc_type, case_status, file_link, filed_at, source_month) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    r["code"],
+                    r.get("market"),
+                    r["doc_type"],
+                    r.get("case_status"),
+                    r.get("file_link"),
+                    filed_iso,
+                    source_month,
+                ),
             )
             inserted += cur.rowcount
     return inserted
-
-
-def import_all_csvs() -> int:
-    """Bootstrap: import every MM月data.csv in the repo root."""
-    total = 0
-    for p in sorted(ROOT.glob("*月data.csv")):
-        total += import_csv(p)
-    return total

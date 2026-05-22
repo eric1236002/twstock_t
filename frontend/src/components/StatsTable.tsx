@@ -10,11 +10,21 @@ function winCls(v: number) {
 }
 
 export function StatsTable({ stats }: { stats: Stats }) {
-  const rows: { docType: string; window: string; n: number; ret: number; win: number }[] = [];
-  for (const [dt, byW] of Object.entries(stats)) {
+  // key = "公司債/稿本" etc. — split into category + 稿本/生效 status.
+  const rows: {
+    cat: string;
+    status: string;
+    window: string;
+    n: number;
+    ret: number;
+    win: number;
+  }[] = [];
+  for (const [key, byW] of Object.entries(stats)) {
+    const [cat, status] = key.split("/");
     for (const w of WINDOWS) {
       const r = byW[w];
-      if (r) rows.push({ docType: dt, window: w, n: r.n, ret: r.avg_return_pct, win: r.win_rate_pct });
+      if (r)
+        rows.push({ cat, status, window: w, n: r.n, ret: r.avg_return_pct, win: r.win_rate_pct });
     }
   }
 
@@ -34,16 +44,28 @@ export function StatsTable({ stats }: { stats: Stats }) {
           {rows.map((r, i) => (
             <tr key={i} className="text-slate-300">
               <td className="px-3 py-2">
-                <span
-                  className={
-                    "rounded px-1.5 py-0.5 text-[10px] " +
-                    (r.docType.includes("增資")
-                      ? "bg-cyan-500/15 text-cyan-400"
-                      : "bg-amber-500/15 text-amber-400")
-                  }
-                >
-                  {r.docType.includes("增資") ? "增資" : "公司債"}
-                </span>
+                <div className="flex items-center gap-1">
+                  <span
+                    className={
+                      "rounded px-1.5 py-0.5 text-[10px] " +
+                      (r.cat.includes("增資")
+                        ? "bg-cyan-500/15 text-cyan-400"
+                        : "bg-amber-500/15 text-amber-400")
+                    }
+                  >
+                    {r.cat}
+                  </span>
+                  <span
+                    className={
+                      "rounded px-1.5 py-0.5 text-[10px] " +
+                      (r.status === "生效"
+                        ? "bg-emerald-500/15 text-emerald-400"
+                        : "bg-slate-500/20 text-slate-300")
+                    }
+                  >
+                    {r.status}
+                  </span>
+                </div>
               </td>
               <td className="px-3 py-2 text-slate-400">{r.window}</td>
               <td className="px-3 py-2 text-right">{r.n}</td>

@@ -1,72 +1,40 @@
-"""Run 上市稿本.py as a subprocess, stream logs, import resulting CSV."""
+"""Background scrape jobs: run the in-process scraper, stream logs, import to DB."""
 from __future__ import annotations
 
 import datetime as dt
-import re
-import subprocess
-import sys
 import threading
-from pathlib import Path
 
-from . import db
-
-ROOT = db.ROOT
-SCRIPT = ROOT / "上市稿本.py"
-ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+from . import db, scraper
 
 _jobs: dict[int, dict] = {}
 _lock = threading.Lock()
 
 
-def _strip_ansi(s: str) -> str:
-    return ANSI_RE.sub("", s)
-
-
-def _run(job_id: int) -> None:
+def _run(job_id: int, roc_year: int, seamon: int | None) -> None:
     job = _jobs[job_id]
     log_lines: list[str] = []
 
+    def log(line: str) -> None:
+        with _lock:
+            log_lines.append(line)
+            job["log"] = log_lines
+
     try:
-        proc = subprocess.Popen(
-            [sys.executable, "-u", str(SCRIPT)],
-            cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
-        job["pid"] = proc.pid
-
-        for raw in proc.stdout:  # type: ignore[union-attr]
-            line = _strip_ansi(raw.rstrip("\n"))
-            with _lock:
-                log_lines.append(line)
-                job["log"] = log_lines
-
-        proc.wait()
-        job["returncode"] = proc.returncode
-
-        inserted = 0
-        if proc.returncode == 0:
-            mm = dt.datetime.now().strftime("%m")
-            csv_path = ROOT / f"{mm}月data.csv"
-            if csv_path.exists():
-                inserted = db.import_csv(csv_path, source_month=mm)
+        inserted = scraper.run_scrape(log, roc_year, seamon)
 
         with _lock:
-            job["status"] = "success" if proc.returncode == 0 else "failed"
+            job["status"] = "success"
             job["rows_inserted"] = inserted
             job["finished_at"] = dt.datetime.now().isoformat(timespec="seconds")
 
         with db.connect() as conn:
             conn.execute(
-                "UPDATE scrape_jobs SET status=?, finished_at=CURRENT_TIMESTAMP, "
+                "UPDATE scrape_jobs SET status='success', finished_at=CURRENT_TIMESTAMP, "
                 "log=?, rows_inserted=? WHERE id=?",
-                (job["status"], "\n".join(log_lines), inserted, job_id),
+                ("\n".join(log_lines), inserted, job_id),
             )
     except Exception as e:  # noqa: BLE001
+        log(f"ERROR: {e}")
         with _lock:
             job["status"] = "failed"
             job["error"] = str(e)
@@ -75,11 +43,16 @@ def _run(job_id: int) -> None:
             conn.execute(
                 "UPDATE scrape_jobs SET status='failed', finished_at=CURRENT_TIMESTAMP, "
                 "log=? WHERE id=?",
-                ("\n".join(log_lines) + f"\nERROR: {e}", job_id),
+                ("\n".join(log_lines), job_id),
             )
 
 
-def start_job() -> int:
+def start_job(roc_year: int | None = None, seamon: int | None = None) -> int:
+    """Start a scrape. Defaults to the current ROC month (ongoing use);
+    pass roc_year with seamon=None for a whole-year backfill."""
+    if roc_year is None:
+        roc_year, seamon = scraper.current_roc_month()
+
     with db.connect() as conn:
         cur = conn.execute("INSERT INTO scrape_jobs (status) VALUES ('running')")
         job_id = cur.lastrowid
@@ -93,8 +66,7 @@ def start_job() -> int:
         "rows_inserted": 0,
     }
 
-    t = threading.Thread(target=_run, args=(job_id,), daemon=True)
-    t.start()
+    threading.Thread(target=_run, args=(job_id, roc_year, seamon), daemon=True).start()
     return job_id
 
 

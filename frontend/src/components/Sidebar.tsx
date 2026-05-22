@@ -4,9 +4,11 @@ import type { EventRow, Summary } from "@/lib/api";
 type Props = {
   summary: Summary | null;
   events: EventRow[];
+  year: string;
   month: string;
   docType: string;
   selectedCode: string | null;
+  onYear: (v: string) => void;
   onMonth: (v: string) => void;
   onDocType: (v: string) => void;
   onPickCode: (code: string) => void;
@@ -15,13 +17,21 @@ type Props = {
 export function Sidebar({
   summary,
   events,
+  year,
   month,
   docType,
   selectedCode,
+  onYear,
   onMonth,
   onDocType,
   onPickCode,
 }: Props) {
+  const nameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of summary?.codes ?? []) if (c.name) m.set(c.code, c.name);
+    return m;
+  }, [summary]);
+
   // Aggregate filtered events into per-code rows
   const codeRows = useMemo(() => {
     const map = new Map<string, { code: string; n: number; types: Set<string>; last: string }>();
@@ -43,6 +53,23 @@ export function Sidebar({
   return (
     <aside className="flex w-64 flex-col border-r border-slate-800 bg-slate-950">
       <div className="space-y-3 border-b border-slate-800 p-4">
+        <div>
+          <label className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">
+            年
+          </label>
+          <select
+            value={year}
+            onChange={(e) => onYear(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+          >
+            <option value="">全部</option>
+            {summary?.years.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">
             月份
@@ -96,8 +123,15 @@ export function Sidebar({
                       : "text-slate-300 hover:bg-slate-900")
                   }
                 >
-                  <span>{r.code}</span>
-                  <span className="flex items-center gap-1">
+                  <span className="flex min-w-0 items-baseline gap-1.5">
+                    <span>{r.code}</span>
+                    {nameMap.get(r.code) && (
+                      <span className="truncate text-xs text-slate-500">
+                        {nameMap.get(r.code)}
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
                     {hasBond && (
                       <span className="rounded bg-amber-500/15 px-1.5 text-[10px] text-amber-400">
                         債

@@ -1,20 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Backtest, type Candle, type EventRow, type Quota, type ScrapeJob, type Summary } from "@/lib/api";
+import { api, type Backtest, type Candle, type CB, type ChipDay, type EventRow, type Quota, type ScrapeJob, type Summary } from "@/lib/api";
 import { Header } from "@/components/Header";
 import { LogDrawer } from "@/components/LogDrawer";
 import { Sidebar } from "@/components/Sidebar";
-import { KlineChart } from "@/components/KlineChart";
+import { KlineChart, CHIP_LABELS, chartHeightForPanes, type ChipMode } from "@/components/KlineChart";
 import { EventsTable } from "@/components/EventsTable";
 import { StatsTable } from "@/components/StatsTable";
+import { CbPanel } from "@/components/CbPanel";
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [year, setYear] = useState("");
   const [month, setMonth] = useState("");
   const [docType, setDocType] = useState("");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [chip, setChip] = useState<ChipDay[]>([]);
+  const [cb, setCb] = useState<CB[]>([]);
+  const [chipPanes, setChipPanes] = useState<ChipMode[]>(["foreign", "trust", "short"]);
   const [backtest, setBacktest] = useState<Backtest | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -27,13 +32,13 @@ export default function App() {
   const refreshAll = useCallback(async () => {
     const [s, e, q] = await Promise.all([
       api.summary(),
-      api.events({ month, doc_type: docType }),
+      api.events({ year, month, doc_type: docType }),
       api.quota().catch(() => null),
     ]);
     setSummary(s);
     setEvents(e);
     setQuota(q);
-  }, [month, docType]);
+  }, [year, month, docType]);
 
   useEffect(() => {
     refreshAll().catch(console.error);
@@ -45,11 +50,20 @@ export default function App() {
     setLoadingDetail(true);
     setDetailError(null);
     setCandles([]);
+    setChip([]);
+    setCb([]);
     setBacktest(null);
-    Promise.all([api.kline(selectedCode, 540), api.backtest(selectedCode)])
-      .then(([k, b]) => {
+    Promise.all([
+      api.kline(selectedCode, 540),
+      api.backtest(selectedCode),
+      api.chip(selectedCode, 540),
+      api.cb(selectedCode),
+    ])
+      .then(([k, b, c, cbRes]) => {
         setCandles(k.data);
         setBacktest(b);
+        setChip(c.data);
+        setCb(cbRes.data);
       })
       .catch((err) => setDetailError(String(err)))
       .finally(() => {
@@ -93,6 +107,9 @@ export default function App() {
   const eventsForSelected = backtest?.events ?? [];
   const stats = backtest?.stats ?? {};
   const scraping = job?.status === "running";
+  const selectedName = selectedCode
+    ? summary?.codes.find((c) => c.code === selectedCode)?.name ?? null
+    : null;
 
   return (
     <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
@@ -108,15 +125,17 @@ export default function App() {
         <Sidebar
           summary={summary}
           events={events}
+          year={year}
           month={month}
           docType={docType}
           selectedCode={selectedCode}
+          onYear={setYear}
           onMonth={setMonth}
           onDocType={setDocType}
           onPickCode={setSelectedCode}
         />
 
-        <main className="flex min-w-0 flex-1 flex-col bg-slate-950">
+        <main className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-slate-950">
           {!selectedCode ? (
             <div className="flex flex-1 items-center justify-center text-slate-600">
               <div className="text-center">
@@ -128,11 +147,14 @@ export default function App() {
             </div>
           ) : (
             <>
-              <div className="flex items-baseline justify-between border-b border-slate-800 px-5 py-3">
+              <div className="flex shrink-0 items-baseline justify-between border-b border-slate-800 px-5 py-3">
                 <div className="flex items-baseline gap-3">
                   <h2 className="font-mono text-2xl font-semibold text-slate-100">
                     {selectedCode}
                   </h2>
+                  {selectedName && (
+                    <span className="text-lg font-medium text-slate-300">{selectedName}</span>
+                  )}
                   {backtest && (
                     <span className="font-mono text-xs text-slate-500">
                       {backtest.events.length} events
@@ -147,18 +169,73 @@ export default function App() {
                 )}
               </div>
 
-              <div className="h-[44%] min-h-[280px] border-b border-slate-800">
-                <KlineChart candles={candles} events={eventsForSelected} />
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-800 px-5 py-1.5">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                  籌碼面板
+                </span>
+                {chipPanes.map((m, i) => (
+                  <div key={i} className="flex items-center">
+                    <select
+                      value={m}
+                      onChange={(e) => {
+                        const next = [...chipPanes];
+                        next[i] = e.target.value as ChipMode;
+                        setChipPanes(next);
+                      }}
+                      className="rounded-l border border-slate-700 bg-slate-900 px-2 py-0.5 font-mono text-xs text-amber-300"
+                    >
+                      {(Object.keys(CHIP_LABELS) as ChipMode[]).map((k) => (
+                        <option key={k} value={k}>
+                          {CHIP_LABELS[k]}
+                        </option>
+                      ))}
+                    </select>
+                    {chipPanes.length > 1 && (
+                      <button
+                        onClick={() => setChipPanes(chipPanes.filter((_, j) => j !== i))}
+                        className="rounded-r border border-l-0 border-slate-700 bg-slate-900 px-1.5 py-0.5 text-xs text-slate-500 hover:text-rose-400"
+                        title="移除面板"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {chipPanes.length < 4 && (
+                  <button
+                    onClick={() => setChipPanes([...chipPanes, "dealer"])}
+                    className="rounded border border-dashed border-slate-700 px-2 py-0.5 font-mono text-xs text-slate-400 hover:bg-slate-800"
+                  >
+                    + 面板
+                  </button>
+                )}
               </div>
 
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto p-4 xl:grid-cols-[2fr_1fr]">
-                <div className="min-w-0">
+              <div
+                className="shrink-0 border-b border-slate-800"
+                style={{ height: chartHeightForPanes(chipPanes.length) }}
+              >
+                <KlineChart
+                  candles={candles}
+                  events={eventsForSelected}
+                  chip={chip}
+                  chipPanes={chipPanes}
+                  cb={cb}
+                />
+              </div>
+
+              <div className="p-4 pb-0">
+                <CbPanel cb={cb} />
+              </div>
+
+              <div className="flex flex-col gap-4 p-4 xl:flex-row xl:items-start">
+                <div className="min-w-0 xl:flex-1">
                   <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
-                    事件 · 後續報酬 · 籌碼
+                    事件 · 後續報酬 · 籌碼（±5 交易日）
                   </h3>
                   <EventsTable events={eventsForSelected} />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 xl:w-[30rem] xl:shrink-0">
                   <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
                     聚合統計
                   </h3>

@@ -1,1 +1,0 @@
-pyinstaller.exe -F 增資.py

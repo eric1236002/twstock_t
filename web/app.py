@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, db, finmind, kline, scraper_job
+from . import backtest, cb, chip, codes, db, finmind, kline, names, scraper_job
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -18,19 +18,23 @@ app = FastAPI(title="twstock 稿本爬蟲 + K 線回測")
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
-    inserted = db.import_all_csvs()
-    if inserted:
-        print(f"[startup] imported {inserted} new events from CSVs")
 
 
 @app.get("/api/events")
 def list_events(
-    month: str | None = Query(None, description="ROC source month 'MM'"),
+    year: str | None = Query(None, description="西元 year 'YYYY' (filed_at)"),
+    month: str | None = Query(None, description="source month 'MM'"),
     code: str | None = None,
     doc_type: str | None = None,
 ):
-    sql = "SELECT id, code, doc_type, filed_at, source_month FROM events WHERE 1=1"
+    sql = (
+        "SELECT id, code, market, doc_type, case_status, file_link, filed_at, source_month "
+        "FROM events WHERE 1=1"
+    )
     args: list = []
+    if year:
+        sql += " AND substr(filed_at,1,4) = ?"
+        args.append(year)
     if month:
         sql += " AND source_month = ?"
         args.append(month)
@@ -57,6 +61,9 @@ def events_summary():
                 "FROM events GROUP BY code ORDER BY last_filed DESC"
             )
         ]
+        years = [r["y"] for r in conn.execute(
+            "SELECT DISTINCT substr(filed_at,1,4) AS y FROM events ORDER BY y DESC"
+        )]
         months = [r["source_month"] for r in conn.execute(
             "SELECT DISTINCT source_month FROM events "
             "WHERE source_month IS NOT NULL ORDER BY source_month"
@@ -64,13 +71,30 @@ def events_summary():
         doc_types = [r["doc_type"] for r in conn.execute(
             "SELECT DISTINCT doc_type FROM events ORDER BY doc_type"
         )]
-    return {"codes": codes, "months": months, "doc_types": doc_types}
+    # Attach 中文股名 (best-effort; FinMind quota may be exhausted)
+    try:
+        names.ensure_names()
+        name_map = names.get_names([c["code"] for c in codes])
+    except Exception:  # noqa: BLE001
+        name_map = {}
+    for c in codes:
+        c["name"] = name_map.get(c["code"])
+    return {"codes": codes, "years": years, "months": months, "doc_types": doc_types}
 
 
 @app.post("/api/scrape")
-def start_scrape():
-    job_id = scraper_job.start_job()
+def start_scrape(
+    year: int | None = Query(None, description="ROC year, e.g. 115; omit for current"),
+    month: int | None = Query(None, ge=1, le=12, description="ROC month; omit for whole year when year given"),
+):
+    # default (no params): current ROC month. year given + no month: whole-year backfill.
+    job_id = scraper_job.start_job(roc_year=year, seamon=month)
     return {"job_id": job_id}
+
+
+@app.post("/api/update-codes")
+def update_codes():
+    return codes.update_code_lists()
 
 
 @app.get("/api/scrape/{job_id}")
@@ -112,6 +136,30 @@ def get_backtest(code: str):
         raise HTTPException(429, str(e))
     except finmind.FinMindError as e:
         raise HTTPException(502, f"FinMind error: {e}")
+
+
+@app.get("/api/chip/{code}")
+def get_chip(code: str, days: int = Query(540, ge=30, le=365 * 5)):
+    end = dt.date.today()
+    start = end - dt.timedelta(days=days)
+    try:
+        chip.ensure_institutional(code, start, end)
+        chip.ensure_margin(code, start, end)
+    except finmind.QuotaExhausted as e:
+        raise HTTPException(429, str(e))
+    except finmind.FinMindError as e:
+        raise HTTPException(502, f"FinMind error: {e}")
+    return {"code": code, "data": chip.daily_series(code, start, end)}
+
+
+@app.get("/api/cb/{code}")
+def get_cb(code: str):
+    """流通中可轉債（轉換價 + 發行資訊），來源 TPEx ISSBD5。"""
+    try:
+        cb.ensure_cb()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"code": code, "data": cb.get_cb(code)}
 
 
 @app.get("/api/quota")

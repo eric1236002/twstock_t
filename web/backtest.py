@@ -10,6 +10,16 @@ WINDOWS = [1, 5, 20, 60]
 CHIP_WINDOW_DAYS = 5  # ±5 trading days around event
 
 
+def _event_status(ev) -> str:
+    """稿本 (draft) vs 生效 (effective) — mirrors the frontend marker logic."""
+    cs = ev["case_status"]
+    if cs == "生效":
+        return "生效"
+    if not cs and "稿本" not in ev["doc_type"]:
+        return "生效"
+    return "稿本"
+
+
 def _next_trading_idx(dates: list[str], target: dt.date) -> int | None:
     """First index with date > target (strict next trading day)."""
     iso = target.isoformat()
@@ -23,7 +33,8 @@ def _next_trading_idx(dates: list[str], target: dt.date) -> int | None:
 def event_returns(code: str) -> dict:
     with db.connect() as conn:
         events = conn.execute(
-            "SELECT id, doc_type, filed_at FROM events WHERE code=? ORDER BY filed_at",
+            "SELECT id, doc_type, case_status, file_link, market, filed_at "
+            "FROM events WHERE code=? ORDER BY filed_at",
             (code,),
         ).fetchall()
 
@@ -58,6 +69,9 @@ def event_returns(code: str) -> dict:
         item: dict = {
             "id": ev["id"],
             "doc_type": ev["doc_type"],
+            "case_status": ev["case_status"],
+            "file_link": ev["file_link"],
+            "market": ev["market"],
             "filed_at": ev["filed_at"],
             "anchor_date": None,
             "anchor_open": None,
@@ -95,18 +109,22 @@ def event_returns(code: str) -> dict:
 
         event_rows.append(item)
 
-    # Aggregate stats per doc_type
+    # Aggregate stats per (category, status). Key = "公司債/稿本" etc. so the
+    # 稿本 (draft) vs 生效 (effective) split shows up separately in the UI.
     stats: dict[str, dict] = {}
     for ev in event_rows:
-        d = ev["doc_type"]
-        bucket = stats.setdefault(d, {f"T+{w}": [] for w in WINDOWS})
+        cat = "增資" if "增資" in ev["doc_type"] else "公司債"
+        status = _event_status(ev)
+        key = f"{cat}/{status}"
+        bucket = stats.setdefault(key, {f"T+{w}": [] for w in WINDOWS})
         for w in WINDOWS:
             r = ev["returns"].get(f"T+{w}")
             if r:
                 bucket[f"T+{w}"].append(r["return_pct"])
 
     agg = {}
-    for d, by_w in stats.items():
+    for d in sorted(stats):
+        by_w = stats[d]
         agg[d] = {}
         for w_key, lst in by_w.items():
             if not lst:

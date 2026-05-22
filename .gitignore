@@ -5,6 +5,13 @@ build
 dist
 fix*
 *.csv
+!codes/*.csv
 *.db
 *.db-journal
 .venv/
+node_modules/
+.parcel-cache/
+frontend/dist/
+.claude/
+.DS_Store
+old/
