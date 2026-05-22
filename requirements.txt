@@ -1,0 +1,9 @@
+# Web app runtime deps (Python 3.13). The bundled frontend is served from
+# web/static/bundle.html — no Node/pnpm needed to run, only to rebuild the UI.
+fastapi==0.135.1
+uvicorn==0.40.0
+httpx==0.28.1
+beautifulsoup4==4.14.3
+tenacity==8.5.0
+python-dotenv==1.2.1
+urllib3==2.3.0
