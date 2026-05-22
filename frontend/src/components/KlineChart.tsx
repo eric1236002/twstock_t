@@ -167,15 +167,23 @@ export function KlineChart({ candles, events, chip, chipPanes }: Props) {
       }))
     );
 
+    // markers encode category (公司債/增資 by colour) + status (稿本/生效):
+    //   稿本(draft) → above bar, arrow down ; 生效(effective) → below bar, arrow up
     const markers: SeriesMarker<Time>[] = events
       .filter((e) => e.anchor_date)
-      .map((e) => ({
-        time: e.anchor_date as Time,
-        position: "aboveBar" as const,
-        color: e.doc_type.includes("增資") ? "#06b6d4" : "#f59e0b",
-        shape: "arrowDown" as const,
-        text: e.doc_type.includes("增資") ? "增" : "債",
-      }));
+      .map((e) => {
+        const isIssue = e.doc_type.includes("增資");
+        const effective =
+          e.case_status === "生效" || (e.case_status == null && !e.doc_type.includes("稿本"));
+        const cat = isIssue ? "增" : "債";
+        return {
+          time: e.anchor_date as Time,
+          position: effective ? "belowBar" : "aboveBar",
+          color: isIssue ? "#06b6d4" : "#f59e0b",
+          shape: effective ? "arrowUp" : "arrowDown",
+          text: cat + (effective ? "效" : "稿"),
+        };
+      });
     markersRef.current?.setMarkers(markers);
     chartRef.current?.timeScale().fitContent();
   }, [candles, events]);

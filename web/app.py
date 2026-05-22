@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, chip, codes, db, finmind, kline, scraper_job
+from . import backtest, chip, codes, db, finmind, kline, names, scraper_job
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -64,6 +64,14 @@ def events_summary():
         doc_types = [r["doc_type"] for r in conn.execute(
             "SELECT DISTINCT doc_type FROM events ORDER BY doc_type"
         )]
+    # Attach 中文股名 (best-effort; FinMind quota may be exhausted)
+    try:
+        names.ensure_names()
+        name_map = names.get_names([c["code"] for c in codes])
+    except Exception:  # noqa: BLE001
+        name_map = {}
+    for c in codes:
+        c["name"] = name_map.get(c["code"])
     return {"codes": codes, "months": months, "doc_types": doc_types}
 
 

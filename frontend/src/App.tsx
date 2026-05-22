@@ -16,7 +16,7 @@ export default function App() {
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chip, setChip] = useState<ChipDay[]>([]);
-  const [chipPanes, setChipPanes] = useState<ChipMode[]>(["foreign", "trust"]);
+  const [chipPanes, setChipPanes] = useState<ChipMode[]>(["foreign", "trust", "short"]);
   const [backtest, setBacktest] = useState<Backtest | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -101,6 +101,9 @@ export default function App() {
   const eventsForSelected = backtest?.events ?? [];
   const stats = backtest?.stats ?? {};
   const scraping = job?.status === "running";
+  const selectedName = selectedCode
+    ? summary?.codes.find((c) => c.code === selectedCode)?.name ?? null
+    : null;
 
   return (
     <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
@@ -141,6 +144,9 @@ export default function App() {
                   <h2 className="font-mono text-2xl font-semibold text-slate-100">
                     {selectedCode}
                   </h2>
+                  {selectedName && (
+                    <span className="text-lg font-medium text-slate-300">{selectedName}</span>
+                  )}
                   {backtest && (
                     <span className="font-mono text-xs text-slate-500">
                       {backtest.events.length} events
@@ -209,14 +215,14 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex flex-col gap-4 p-4">
-                <div className="min-w-0">
+              <div className="flex flex-col gap-4 p-4 xl:flex-row xl:items-start">
+                <div className="min-w-0 xl:flex-1">
                   <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
                     事件 · 後續報酬 · 籌碼（±5 交易日）
                   </h3>
                   <EventsTable events={eventsForSelected} />
                 </div>
-                <div className="min-w-0 max-w-xl">
+                <div className="min-w-0 xl:w-[30rem] xl:shrink-0">
                   <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
                     聚合統計
                   </h3>

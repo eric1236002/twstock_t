@@ -22,6 +22,12 @@ export function Sidebar({
   onDocType,
   onPickCode,
 }: Props) {
+  const nameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of summary?.codes ?? []) if (c.name) m.set(c.code, c.name);
+    return m;
+  }, [summary]);
+
   // Aggregate filtered events into per-code rows
   const codeRows = useMemo(() => {
     const map = new Map<string, { code: string; n: number; types: Set<string>; last: string }>();
@@ -96,8 +102,15 @@ export function Sidebar({
                       : "text-slate-300 hover:bg-slate-900")
                   }
                 >
-                  <span>{r.code}</span>
-                  <span className="flex items-center gap-1">
+                  <span className="flex min-w-0 items-baseline gap-1.5">
+                    <span>{r.code}</span>
+                    {nameMap.get(r.code) && (
+                      <span className="truncate text-xs text-slate-500">
+                        {nameMap.get(r.code)}
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
                     {hasBond && (
                       <span className="rounded bg-amber-500/15 px-1.5 text-[10px] text-amber-400">
                         債

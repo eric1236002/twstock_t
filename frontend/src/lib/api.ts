@@ -7,7 +7,7 @@ export type EventRow = {
 };
 
 export type Summary = {
-  codes: { code: string; n: number; last_filed: string }[];
+  codes: { code: string; n: number; last_filed: string; name: string | null }[];
   months: string[];
   doc_types: string[];
 };
@@ -55,6 +55,9 @@ export type Chip = {
 export type EventDetail = {
   id: number;
   doc_type: string;
+  case_status: string | null;
+  file_link: string | null;
+  market: string | null;
   filed_at: string;
   anchor_date: string | null;
   anchor_open: number | null;

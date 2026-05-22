@@ -73,6 +73,23 @@ export function EventsTable({ events }: { events: EventDetail[] }) {
                 >
                   {isIssue ? "增資" : "公司債"}
                 </span>
+                {(() => {
+                  const effective =
+                    e.case_status === "生效" ||
+                    (e.case_status == null && !e.doc_type.includes("稿本"));
+                  return (
+                    <span
+                      className={
+                        "rounded px-1.5 py-0.5 text-[10px] " +
+                        (effective
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : "bg-slate-500/20 text-slate-300")
+                      }
+                    >
+                      {effective ? "生效" : "稿本"}
+                    </span>
+                  );
+                })()}
                 <span className="num text-xs text-slate-400">{fmtFiled(e.filed_at)}</span>
               </div>
 
