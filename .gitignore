@@ -5,3 +5,6 @@ build
 dist
 fix*
 *.csv
+*.db
+*.db-journal
+.venv/

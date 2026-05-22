@@ -1,0 +1,101 @@
+export type EventRow = {
+  id: number;
+  code: string;
+  doc_type: string;
+  filed_at: string;
+  source_month: string | null;
+};
+
+export type Summary = {
+  codes: { code: string; n: number; last_filed: string }[];
+  months: string[];
+  doc_types: string[];
+};
+
+export type Quota = {
+  tokens: number;
+  used: number;
+  remaining: number;
+  limit: number;
+  by_token: { token_suffix: string; used: number; remaining: number; exhausted: boolean }[];
+};
+
+export type Candle = {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+export type ReturnPoint = { date: string; close: number; return_pct: number };
+
+export type Chip = {
+  window: [string, string];
+  institutional: {
+    foreign_net: number;
+    trust_net: number;
+    dealer_net: number;
+    total_net: number;
+  };
+  margin: { margin_delta: number | null; short_delta: number | null };
+};
+
+export type EventDetail = {
+  id: number;
+  doc_type: string;
+  filed_at: string;
+  anchor_date: string | null;
+  anchor_open: number | null;
+  returns: Record<string, ReturnPoint>;
+  chip: Chip | Record<string, never>;
+};
+
+export type Stats = Record<
+  string,
+  Record<string, { n: number; avg_return_pct: number; win_rate_pct: number } | null>
+>;
+
+export type Backtest = {
+  code: string;
+  events: EventDetail[];
+  stats: Stats;
+};
+
+export type ScrapeJob = {
+  id: number;
+  status: "running" | "success" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  rows_inserted: number;
+  log: string[];
+  log_total: number;
+};
+
+async function j<T>(url: string, opts?: RequestInit): Promise<T> {
+  const r = await fetch(url, opts);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status}: ${text}`);
+  }
+  return r.json();
+}
+
+export const api = {
+  summary: () => j<Summary>("/api/events/summary"),
+  events: (params: { month?: string; code?: string; doc_type?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.month) qs.set("month", params.month);
+    if (params.code) qs.set("code", params.code);
+    if (params.doc_type) qs.set("doc_type", params.doc_type);
+    return j<EventRow[]>(`/api/events?${qs}`);
+  },
+  quota: () => j<Quota>("/api/quota"),
+  kline: (code: string, days = 730) =>
+    j<{ code: string; data: Candle[] }>(`/api/kline/${code}?days=${days}`),
+  backtest: (code: string) => j<Backtest>(`/api/backtest/${code}`),
+  startScrape: () => j<{ job_id: number }>("/api/scrape", { method: "POST" }),
+  scrapeJob: (id: number, since = 0) =>
+    j<ScrapeJob>(`/api/scrape/${id}?since=${since}`),
+};
