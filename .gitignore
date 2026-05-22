@@ -8,3 +8,7 @@ fix*
 *.db
 *.db-journal
 .venv/
+node_modules/
+.parcel-cache/
+frontend/dist/
+.claude/

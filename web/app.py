@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, db, finmind, kline, scraper_job
+from . import backtest, chip, db, finmind, kline, scraper_job
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -112,6 +112,20 @@ def get_backtest(code: str):
         raise HTTPException(429, str(e))
     except finmind.FinMindError as e:
         raise HTTPException(502, f"FinMind error: {e}")
+
+
+@app.get("/api/chip/{code}")
+def get_chip(code: str, days: int = Query(540, ge=30, le=365 * 5)):
+    end = dt.date.today()
+    start = end - dt.timedelta(days=days)
+    try:
+        chip.ensure_institutional(code, start, end)
+        chip.ensure_margin(code, start, end)
+    except finmind.QuotaExhausted as e:
+        raise HTTPException(429, str(e))
+    except finmind.FinMindError as e:
+        raise HTTPException(502, f"FinMind error: {e}")
+    return {"code": code, "data": chip.daily_series(code, start, end)}
 
 
 @app.get("/api/quota")

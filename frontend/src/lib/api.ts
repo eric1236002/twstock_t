@@ -29,6 +29,16 @@ export type Candle = {
   volume: number;
 };
 
+export type ChipDay = {
+  date: string;
+  foreign_net: number;
+  trust_net: number;
+  dealer_net: number;
+  total_net: number;
+  margin_balance: number | null;
+  short_balance: number | null;
+};
+
 export type ReturnPoint = { date: string; close: number; return_pct: number };
 
 export type Chip = {
@@ -94,6 +104,8 @@ export const api = {
   quota: () => j<Quota>("/api/quota"),
   kline: (code: string, days = 730) =>
     j<{ code: string; data: Candle[] }>(`/api/kline/${code}?days=${days}`),
+  chip: (code: string, days = 540) =>
+    j<{ code: string; data: ChipDay[] }>(`/api/chip/${code}?days=${days}`),
   backtest: (code: string) => j<Backtest>(`/api/backtest/${code}`),
   startScrape: () => j<{ job_id: number }>("/api/scrape", { method: "POST" }),
   scrapeJob: (id: number, since = 0) =>

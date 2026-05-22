@@ -28,49 +28,64 @@ def _classify_institution(name: str) -> str | None:
     return None
 
 
-def _cached_inst_max(code: str) -> dt.date | None:
+def _missing_ranges(table: str, code: str, start: dt.date, end: dt.date) -> list[tuple[dt.date, dt.date]]:
+    """Ranges within [start, end] not yet covered by cache.
+
+    Cache coverage is treated as the contiguous [min, max] span (we only ever
+    fetch contiguous ranges). Returns the head gap (before min) and/or tail gap
+    (after max) that still need fetching.
+    """
     with db.connect() as conn:
         row = conn.execute(
-            "SELECT MAX(date) AS mx FROM institutional WHERE code=?", (code,)
+            f"SELECT MIN(date) AS mn, MAX(date) AS mx FROM {table} WHERE code=?",
+            (code,),
         ).fetchone()
-    return dt.date.fromisoformat(row["mx"]) if row and row["mx"] else None
+    if not row or not row["mn"]:
+        return [(start, end)]
+    mn = dt.date.fromisoformat(str(row["mn"]))
+    mx = dt.date.fromisoformat(str(row["mx"]))
+    gaps: list[tuple[dt.date, dt.date]] = []
+    if start < mn:
+        gaps.append((start, mn - dt.timedelta(days=1)))
+    if end > mx:
+        gaps.append((mx + dt.timedelta(days=1), end))
+    return gaps
 
 
 def ensure_institutional(code: str, start: dt.date, end: dt.date) -> int:
-    mx = _cached_inst_max(code)
-    fetch_start = max(start, mx + dt.timedelta(days=1)) if mx else start
-    if fetch_start > end:
-        return 0
-    rows = finmind.get_data(
-        INST_DATASET,
-        data_id=code,
-        start_date=fetch_start.isoformat(),
-        end_date=end.isoformat(),
-    )
-    # Aggregate per date: net = buy - sell, per category
-    agg: dict[str, dict[str, int]] = {}
-    for r in rows:
-        date = r.get("date")
-        if not date:
-            continue
-        cat = _classify_institution(r.get("name", ""))
-        if not cat:
-            continue
-        bucket = agg.setdefault(date, {"foreign": 0, "trust": 0, "dealer": 0})
-        net = int((r.get("buy") or 0)) - int((r.get("sell") or 0))
-        bucket[cat] += net
-    if not agg:
-        return 0
-    with db.connect() as conn:
-        cur = conn.executemany(
-            "INSERT OR REPLACE INTO institutional "
-            "(code, date, foreign_net, trust_net, dealer_net) VALUES (?, ?, ?, ?, ?)",
-            [
-                (code, d, v["foreign"], v["trust"], v["dealer"])
-                for d, v in agg.items()
-            ],
+    inserted = 0
+    for s, e in _missing_ranges("institutional", code, start, end):
+        rows = finmind.get_data(
+            INST_DATASET,
+            data_id=code,
+            start_date=s.isoformat(),
+            end_date=e.isoformat(),
         )
-        return cur.rowcount
+        # Aggregate per date: net = buy - sell, per category
+        agg: dict[str, dict[str, int]] = {}
+        for r in rows:
+            date = r.get("date")
+            if not date:
+                continue
+            cat = _classify_institution(r.get("name", ""))
+            if not cat:
+                continue
+            bucket = agg.setdefault(date, {"foreign": 0, "trust": 0, "dealer": 0})
+            net = int((r.get("buy") or 0)) - int((r.get("sell") or 0))
+            bucket[cat] += net
+        if not agg:
+            continue
+        with db.connect() as conn:
+            cur = conn.executemany(
+                "INSERT OR REPLACE INTO institutional "
+                "(code, date, foreign_net, trust_net, dealer_net) VALUES (?, ?, ?, ?, ?)",
+                [
+                    (code, d, v["foreign"], v["trust"], v["dealer"])
+                    for d, v in agg.items()
+                ],
+            )
+            inserted += cur.rowcount
+    return inserted
 
 
 # ---- Margin / short -------------------------------------------------------
@@ -78,43 +93,34 @@ def ensure_institutional(code: str, start: dt.date, end: dt.date) -> int:
 MARGIN_DATASET = "TaiwanStockMarginPurchaseShortSale"
 
 
-def _cached_margin_max(code: str) -> dt.date | None:
-    with db.connect() as conn:
-        row = conn.execute(
-            "SELECT MAX(date) AS mx FROM margin WHERE code=?", (code,)
-        ).fetchone()
-    return dt.date.fromisoformat(row["mx"]) if row and row["mx"] else None
-
-
 def ensure_margin(code: str, start: dt.date, end: dt.date) -> int:
-    mx = _cached_margin_max(code)
-    fetch_start = max(start, mx + dt.timedelta(days=1)) if mx else start
-    if fetch_start > end:
-        return 0
-    rows = finmind.get_data(
-        MARGIN_DATASET,
-        data_id=code,
-        start_date=fetch_start.isoformat(),
-        end_date=end.isoformat(),
-    )
-    if not rows:
-        return 0
-    with db.connect() as conn:
-        cur = conn.executemany(
-            "INSERT OR REPLACE INTO margin "
-            "(code, date, margin_balance, short_balance) VALUES (?, ?, ?, ?)",
-            [
-                (
-                    code,
-                    r["date"],
-                    int(r.get("MarginPurchaseTodayBalance") or 0),
-                    int(r.get("ShortSaleTodayBalance") or 0),
-                )
-                for r in rows
-                if r.get("date")
-            ],
+    inserted = 0
+    for s, e in _missing_ranges("margin", code, start, end):
+        rows = finmind.get_data(
+            MARGIN_DATASET,
+            data_id=code,
+            start_date=s.isoformat(),
+            end_date=e.isoformat(),
         )
-        return cur.rowcount
+        if not rows:
+            continue
+        with db.connect() as conn:
+            cur = conn.executemany(
+                "INSERT OR REPLACE INTO margin "
+                "(code, date, margin_balance, short_balance) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        code,
+                        r["date"],
+                        int(r.get("MarginPurchaseTodayBalance") or 0),
+                        int(r.get("ShortSaleTodayBalance") or 0),
+                    )
+                    for r in rows
+                    if r.get("date")
+                ],
+            )
+            inserted += cur.rowcount
+    return inserted
 
 
 # ---- Window aggregation around an event date -----------------------------
@@ -155,3 +161,48 @@ def margin_change(code: str, start: str, end: str) -> dict:
         "margin_delta": last["margin_balance"] - first["margin_balance"],
         "short_delta": last["short_balance"] - first["short_balance"],
     }
+
+
+# ---- Daily series (for sub-pane histograms) ------------------------------
+
+def daily_series(code: str, start: dt.date, end: dt.date) -> list[dict]:
+    """Per-day institutional nets (張) + margin/short balance, merged by date."""
+    s, e = start.isoformat(), end.isoformat()
+    with db.connect() as conn:
+        inst = conn.execute(
+            "SELECT date, foreign_net, trust_net, dealer_net FROM institutional "
+            "WHERE code=? AND date BETWEEN ? AND ? ORDER BY date",
+            (code, s, e),
+        ).fetchall()
+        mg = conn.execute(
+            "SELECT date, margin_balance, short_balance FROM margin "
+            "WHERE code=? AND date BETWEEN ? AND ? ORDER BY date",
+            (code, s, e),
+        ).fetchall()
+
+    merged: dict[str, dict] = {}
+    for r in inst:
+        d = r["date"].isoformat() if isinstance(r["date"], dt.date) else r["date"]
+        f = (r["foreign_net"] or 0) / 1000
+        t = (r["trust_net"] or 0) / 1000
+        de = (r["dealer_net"] or 0) / 1000
+        merged[d] = {
+            "date": d,
+            "foreign_net": round(f),
+            "trust_net": round(t),
+            "dealer_net": round(de),
+            "total_net": round(f + t + de),
+            "margin_balance": None,
+            "short_balance": None,
+        }
+    for r in mg:
+        d = r["date"].isoformat() if isinstance(r["date"], dt.date) else r["date"]
+        row = merged.setdefault(d, {
+            "date": d, "foreign_net": 0, "trust_net": 0,
+            "dealer_net": 0, "total_net": 0,
+            "margin_balance": None, "short_balance": None,
+        })
+        row["margin_balance"] = r["margin_balance"]
+        row["short_balance"] = r["short_balance"]
+
+    return [merged[k] for k in sorted(merged)]
