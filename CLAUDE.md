@@ -8,24 +8,27 @@ Three standalone Python scrapers that pull Taiwanese securities filings and writ
 
 ## Scripts
 
-- **上市稿本.py** — Scrapes TWSE listed-company drafts (`各類公司債(稿本)` and `增資發行(稿本)`) by POSTing to `https://doc.twse.com.tw/server-java/t57sb01` for every code in `上市代碼/CODE.csv`. Uses `httpx` through a residential proxy, runs 50 concurrent workers (`ThreadPoolExecutor`), retries each code up to 5× via `tenacity`, and writes `MM月data.csv` containing `[date, doc_type, file_id]` rows. This is the actively maintained version.
-- **上櫃稿本.py** — Older OTC (`上櫃`) variant of the same scrape. Single-threaded `requests` with a sleep-every-10 throttle, no proxy, no retries. Reads from `上櫃代號/CODE.csv` (not checked in). Treat as legacy reference; mirror changes from `上市稿本.py` if asked to modernize it.
-- **增資.py** — Scrapes capital-increase announcements from MOPS (`https://mops.twse.com.tw/mops/web/t05st02`) for the previous calendar day, filters rows whose hidden-input title contains `增資` / `公司債`, and writes `YYYYMMDD{type}結果.xlsx` via openpyxl. **The source file is encoded in Big5** — many string literals and comments will appear as mojibake if opened as UTF-8. Preserve the Big5 bytes when editing; do not "fix" the encoding without coordinating with the user.
+The listed-company scraper now lives **inside the web backend** at `web/scraper.py` (see Web app → Architecture). The standalone scripts below have been archived to `old/` (gitignored) as reference — they are no longer wired into anything.
+
+- **`web/scraper.py`** — the live listed-company scraper. POSTs each code in `上市代碼/CODE.csv` to `https://doc.twse.com.tw/server-java/t57sb01`, runs 50 concurrent workers (`ThreadPoolExecutor`) with `tenacity` retry through the residential proxy, keeps `各類公司債(稿本)` / `增資發行(稿本)` rows, and writes `MM月data.csv` (`code, doc_type, ROC datetime`). Triggered via the `/api/scrape` endpoint.
+- **old/上市稿本.py** — the original standalone version `web/scraper.py` was ported from. Archived reference.
+- **old/上櫃稿本.py** — older OTC (`上櫃`) variant: single-threaded `requests`, sleep-every-10 throttle, no proxy/retries. Legacy reference.
+- **old/增資.py** — MOPS capital-increase scraper (`https://mops.twse.com.tw/mops/web/t05st02`), writes `YYYYMMDD{type}結果.xlsx` via openpyxl. **Encoded in Big5** — string literals/comments look like mojibake as UTF-8; preserve the Big5 bytes if editing. Not integrated into the web app.
 
 ## Common commands
 
 ```bash
-# Run the active scraper (reads .env for proxy, ./上市代碼/CODE.csv for codes,
-# writes ./MM月data.csv where MM is the current month)
-python 上市稿本.py
+# The scraper runs inside the web app — trigger it via POST /api/scrape (the
+# "一鍵抓取" button) or directly:
+#   python3 -c "from web.scraper import run_listed_scrape; run_listed_scrape(print)"
+# (reads .env for proxy, ./上市代碼/CODE.csv for codes, writes ./MM月data.csv)
 
 # Quick proxy / endpoint sanity check (single code, no concurrency)
 python scratch/test_request.py
 python scratch/test_proxy.py
-
-# Rebuild a Windows executable (run on Windows; outputs to dist/)
-pyinstaller 上市稿本.spec
 ```
+
+The old PyInstaller `.spec` build descriptors and the Windows `.exe` workflow have been removed (the app is now web-based). If you ever need to rebuild an exe, regenerate a spec with `pyi-makespec`.
 
 There is no `requirements.txt`. The runtime deps used across the scripts are: `httpx`, `requests`, `beautifulsoup4`, `tenacity`, `colorlog`, `python-dotenv`, `urllib3`, `openpyxl`.
 
@@ -71,7 +74,8 @@ cp frontend/bundle.html web/static/bundle.html
 - `web/kline.py` — uses dataset `TaiwanStockPrice` (raw price; `TaiwanStockPriceAdj` 還原 needs Backer despite what the docs imply). Caches in `kline` table; only fetches the missing tail.
 - `web/chip.py` — `TaiwanStockInstitutionalInvestorsBuySell` + `TaiwanStockMarginPurchaseShortSale`. Aggregates institutional `buy - sell` per (foreign/trust/dealer) into the `institutional` table; stores `Margin/ShortSaleTodayBalance` per day.
 - `web/backtest.py` — anchor = first trading day **strictly after** `filed_at.date()`, T+0 uses that day's **open**; T+N uses the **close** N trading days later. Chip window = ±5 trading days around anchor.
-- `web/scraper_job.py` — runs `上市稿本.py` as a subprocess, streams stdout into memory + `scrape_jobs.log`, imports the resulting `MM月data.csv` into `events` on success.
+- `web/scraper.py` — the listed-company scraper, integrated in-process (ported from the standalone `上市稿本.py`). `run_listed_scrape(log)` POSTs each code in `上市代碼/CODE.csv` to the TWSE doc endpoint through the residential proxy (50 workers, tenacity retry, `verify=False`), writes `MM月data.csv`, and streams progress via the `log` callback.
+- `web/scraper_job.py` — runs `web/scraper.run_listed_scrape` in a background thread (no subprocess), buffers log lines in memory + `scrape_jobs`, imports the resulting `MM月data.csv` into `events` on success.
 - `web/app.py` — FastAPI; on startup runs `init_db()` and imports any `MM月data.csv` in repo root.
 - `frontend/` — React + TS + Vite + Tailwind + shadcn/ui. Bundled to a single `bundle.html` via `web-artifacts-builder` skill; FastAPI serves that at `/`.
 
@@ -95,8 +99,7 @@ FINMIND_TOKENS=token1,token2,token3   # comma-separated; free tier = 600/hour ea
 ### Things to watch for
 
 - File and identifier names are Chinese; keep them as-is in code and tooling references.
-- `.spec` files are PyInstaller config, not Python type stubs — don't treat them as such.
-- `chromedriver.exe` and `packet.exe.txt` are stale artifacts from an older Selenium-based version that no longer runs; do not wire new code to them without checking with the user.
+- `old/` holds archived standalone scrapers + their PyInstaller artifacts; it is gitignored and not wired into anything. Don't import from it — the live scraper is `web/scraper.py`.
 - `MM月data.csv` columns are **`code, doc_type, ROC datetime`** (not `[date, doc_type, file_id]` — earlier draft of this doc was wrong).
 - SQLite has `detect_types=PARSE_DECLTYPES` on, so `DATE` columns come back as `datetime.date`. Convert to ISO strings before comparing with bisect on date strings.
 - `TaiwanStockPriceAdj` is documented as Free with `data_id` but returns 400 ("Your level is register") for these accounts — use `TaiwanStockPrice` instead.
