@@ -10,14 +10,23 @@ logger = logging.getLogger(__name__)
 DATASET = "TaiwanStockPrice"  # PriceAdj (還原) requires backer; raw price is free
 
 
-def _cached_max_date(code: str) -> dt.date | None:
+def _cached_bounds(code: str) -> tuple[dt.date, dt.date] | None:
     with db.connect() as conn:
         row = conn.execute(
-            "SELECT MAX(date) AS mx FROM kline WHERE code=?", (code,)
+            "SELECT MIN(date) AS mn, MAX(date) AS mx FROM kline WHERE code=?", (code,)
         ).fetchone()
-    if row and row["mx"]:
-        return dt.date.fromisoformat(row["mx"])
+    if row and row["mn"] and row["mx"]:
+        return dt.date.fromisoformat(str(row["mn"])), dt.date.fromisoformat(str(row["mx"]))
     return None
+
+
+def _fetch_into_cache(code: str, start: dt.date, end: dt.date) -> int:
+    if start > end:
+        return 0
+    data = finmind.get_data(
+        DATASET, data_id=code, start_date=start.isoformat(), end_date=end.isoformat()
+    )
+    return _insert_rows(code, data)
 
 
 def _insert_rows(code: str, rows: list[dict]) -> int:
@@ -45,18 +54,18 @@ def _insert_rows(code: str, rows: list[dict]) -> int:
 
 
 def ensure_range(code: str, start: dt.date, end: dt.date) -> int:
-    """Fetch FinMind for any missing date range. Single HTTP call (FinMind returns range)."""
-    mx = _cached_max_date(code)
-    fetch_start = max(start, (mx + dt.timedelta(days=1))) if mx else start
-    if fetch_start > end:
-        return 0
-    data = finmind.get_data(
-        DATASET,
-        data_id=code,
-        start_date=fetch_start.isoformat(),
-        end_date=end.isoformat(),
-    )
-    return _insert_rows(code, data)
+    """Fetch FinMind for any missing date range — backfills BOTH the older head
+    and the newer tail so the cache always spans the full requested window."""
+    bounds = _cached_bounds(code)
+    if bounds is None:
+        return _fetch_into_cache(code, start, end)
+    mn, mx = bounds
+    inserted = 0
+    if start < mn:  # backfill older data before the cached minimum
+        inserted += _fetch_into_cache(code, start, mn - dt.timedelta(days=1))
+    if end > mx:  # fetch newer data after the cached maximum
+        inserted += _fetch_into_cache(code, mx + dt.timedelta(days=1), end)
+    return inserted
 
 
 def get_kline(code: str, start: dt.date | None = None, end: dt.date | None = None) -> list[dict]:

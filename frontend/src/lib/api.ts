@@ -94,6 +94,29 @@ export type Backtest = {
   stats: Stats;
 };
 
+export type OverviewStock = {
+  code: string;
+  market: string | null;
+  name: string | null;
+  has_bond: boolean;
+  has_issue: boolean;
+  event_count: number;
+  last_event: string;
+  price_change_pct: number | null;
+};
+
+export type OverviewResponse = {
+  stocks: OverviewStock[];
+  summary: {
+    total: number;
+    cb_count: number;
+    issue_count: number;
+    avg_price_change: number | null;
+  };
+  years: string[];
+  months: string[];
+};
+
 export type ScrapeJob = {
   id: number;
   status: "running" | "success" | "failed";
@@ -130,6 +153,12 @@ export const api = {
     j<{ code: string; data: ChipDay[] }>(`/api/chip/${code}?days=${days}`),
   cb: (code: string) => j<{ code: string; data: CB[] }>(`/api/cb/${code}`),
   backtest: (code: string) => j<Backtest>(`/api/backtest/${code}`),
+  overview: (params: { year?: string; month?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.year) qs.set("year", params.year);
+    if (params.month) qs.set("month", params.month);
+    return j<OverviewResponse>(`/api/overview?${qs}`);
+  },
   startScrape: () => j<{ job_id: number }>("/api/scrape", { method: "POST" }),
   scrapeJob: (id: number, since = 0) =>
     j<ScrapeJob>(`/api/scrape/${id}?since=${since}`),

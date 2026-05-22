@@ -31,11 +31,26 @@ function fmtFiled(iso: string) {
   return m ? `${m[1]}/${m[2]} ${m[3]}:${m[4]}` : iso;
 }
 
+// "202605_2313_B011.pdf" → TWSE 稿本搜尋頁 URL
+function twseDocUrl(fileLink: string): string {
+  const parts = fileLink.replace(/\.pdf$/i, "").split("_");
+  if (parts.length < 2) return "https://doc.twse.com.tw/";
+  const yyyymm = parts[0];
+  const code = parts[1];
+  const calYear = parseInt(yyyymm.slice(0, 4), 10);
+  const month = yyyymm.slice(4, 6);
+  const rocYear = calYear - 1911;
+  return (
+    `https://doc.twse.com.tw/server-java/t57sb01` +
+    `?id=&key=&step=1&co_id=${code}&year=${rocYear}&seamon=${parseInt(month, 10)}&mtype=B&dtype=`
+  );
+}
+
 function Stat({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
     <div className="flex flex-col">
-      <span className="text-[9px] uppercase tracking-wider text-slate-500">{label}</span>
-      <span className={"num text-xs " + (cls ?? "text-slate-300")}>{value}</span>
+      <span className="text-[9px] uppercase tracking-wider text-slate-400">{label}</span>
+      <span className={"num text-sm font-medium " + (cls ?? "text-white")}>{value}</span>
     </div>
   );
 }
@@ -67,7 +82,7 @@ export function EventsTable({ events }: { events: EventDetail[] }) {
                   className={
                     "rounded px-1.5 py-0.5 text-[10px] " +
                     (isIssue
-                      ? "bg-cyan-500/15 text-cyan-400"
+                      ? "bg-cyan-500/25 text-cyan-300"
                       : "bg-amber-500/15 text-amber-400")
                   }
                 >
@@ -90,7 +105,17 @@ export function EventsTable({ events }: { events: EventDetail[] }) {
                     </span>
                   );
                 })()}
-                <span className="num text-xs text-slate-400">{fmtFiled(e.filed_at)}</span>
+                <span className="num text-sm text-white">{fmtFiled(e.filed_at)}</span>
+                {e.file_link && (
+                  <a
+                    href={twseDocUrl(e.file_link)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded bg-slate-700/50 px-1.5 py-0.5 text-[10px] text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                  >
+                    原文
+                  </a>
+                )}
               </div>
 
               <Stat label="T+0開" value={e.anchor_open?.toFixed(2) ?? "—"} />
@@ -109,7 +134,7 @@ export function EventsTable({ events }: { events: EventDetail[] }) {
 
             {/* bottom row: chip data */}
             <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-slate-800/60 pt-2">
-              <span className="text-[9px] uppercase tracking-wider text-slate-600">
+              <span className="text-[9px] uppercase tracking-wider text-slate-400">
                 籌碼 ±5日
               </span>
               <Stat label="外資張" value={fmtLot(inst?.foreign_net)} cls={pctCls(inst?.foreign_net)} />

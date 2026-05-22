@@ -14,6 +14,7 @@ import {
   type ITextWatermarkPluginApi,
   type SeriesMarker,
   type Time,
+  TickMarkType,
 } from "lightweight-charts";
 import type { Candle, CB, ChipDay, EventDetail } from "@/lib/api";
 
@@ -107,6 +108,7 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       autoSize: true,
+      localization: { dateFormat: "yyyy/MM/dd" },
       layout: {
         background: { color: "#0b0f14" },
         textColor: "#cbd5e1",
@@ -119,7 +121,17 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
         horzLines: { color: "#1e293b" },
       },
       rightPriceScale: { borderColor: "#334155", minimumWidth: PRICE_SCALE_W },
-      timeScale: { borderColor: "#334155", timeVisible: false },
+      timeScale: {
+        borderColor: "#334155",
+        timeVisible: false,
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => {
+          const s = String(time); // "YYYY-MM-DD"
+          const [y, m, d] = s.split("-");
+          if (tickMarkType === TickMarkType.Year) return y;
+          if (tickMarkType === TickMarkType.Month) return `${y}/${Number(m)}月`;
+          return `${y}/${Number(m)}/${Number(d)}`;
+        },
+      },
       crosshair: { mode: 1 },
     });
 
@@ -141,7 +153,6 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
     chartRef.current = chart;
     seriesRef.current = series;
     volRef.current = vol;
-    markersRef.current = createSeriesMarkers(series, []);
 
     return () => {
       chart.remove();
@@ -177,8 +188,9 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
 
     // markers encode category (公司債/增資 by colour) + status (稿本/生效):
     //   稿本(draft) → above bar, arrow down ; 生效(effective) → below bar, arrow up
+    const candleDates = new Set(candles.map((c) => c.date));
     const markers: SeriesMarker<Time>[] = events
-      .filter((e) => e.anchor_date)
+      .filter((e) => e.anchor_date && candleDates.has(e.anchor_date))
       .map((e) => {
         const isIssue = e.doc_type.includes("增資");
         const effective =
@@ -192,7 +204,11 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
           text: cat + (effective ? "效" : "稿"),
         };
       });
-    markersRef.current?.setMarkers(markers);
+    markers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+
+    // 每次 setData 後重建 plugin，避免舊位置資訊造成 marker 跑版
+    markersRef.current?.detach();
+    markersRef.current = createSeriesMarkers(seriesRef.current, markers);
     chartRef.current?.timeScale().fitContent();
   }, [candles, events]);
 

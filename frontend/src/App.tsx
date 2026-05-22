@@ -3,12 +3,16 @@ import { api, type Backtest, type Candle, type CB, type ChipDay, type EventRow, 
 import { Header } from "@/components/Header";
 import { LogDrawer } from "@/components/LogDrawer";
 import { Sidebar } from "@/components/Sidebar";
+import { Overview } from "@/components/Overview";
 import { KlineChart, CHIP_LABELS, chartHeightForPanes, type ChipMode } from "@/components/KlineChart";
 import { EventsTable } from "@/components/EventsTable";
 import { StatsTable } from "@/components/StatsTable";
 import { CbPanel } from "@/components/CbPanel";
 
+type Tab = "overview" | "detail";
+
 export default function App() {
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [summary, setSummary] = useState<Summary | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -54,9 +58,9 @@ export default function App() {
     setCb([]);
     setBacktest(null);
     Promise.all([
-      api.kline(selectedCode, 540),
+      api.kline(selectedCode, 1460),
       api.backtest(selectedCode),
-      api.chip(selectedCode, 540),
+      api.chip(selectedCode, 1460),
       api.cb(selectedCode),
     ])
       .then(([k, b, c, cbRes]) => {
@@ -104,12 +108,32 @@ export default function App() {
     setLogOpen(true);
   }, []);
 
+  const handleOverviewSelect = useCallback((code: string) => {
+    setSelectedCode(code);
+    setActiveTab("detail");
+  }, []);
+
   const eventsForSelected = backtest?.events ?? [];
   const stats = backtest?.stats ?? {};
   const scraping = job?.status === "running";
   const selectedName = selectedCode
     ? summary?.codes.find((c) => c.code === selectedCode)?.name ?? null
     : null;
+
+  const tabBtn = (t: Tab, label: string) => (
+    <button
+      key={t}
+      onClick={() => setActiveTab(t)}
+      className={
+        "border-b-2 px-5 py-2.5 font-mono text-sm transition-colors " +
+        (activeTab === t
+          ? "border-amber-400 text-amber-300"
+          : "border-transparent text-slate-400 hover:text-slate-200")
+      }
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
@@ -121,6 +145,15 @@ export default function App() {
         hasLog={job !== null}
       />
 
+      {/* Tab navigation */}
+      <div className="flex shrink-0 border-b border-slate-800 px-4">
+        {tabBtn("overview", "總覽")}
+        {tabBtn("detail", "詳細分析")}
+      </div>
+
+      {activeTab === "overview" ? (
+        <Overview onSelectCode={handleOverviewSelect} />
+      ) : (
       <div className="flex min-h-0 flex-1">
         <Sidebar
           summary={summary}
@@ -230,13 +263,13 @@ export default function App() {
 
               <div className="flex flex-col gap-4 p-4 xl:flex-row xl:items-start">
                 <div className="min-w-0 xl:flex-1">
-                  <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                  <h3 className="mb-2 font-mono text-sm font-semibold text-white">
                     事件 · 後續報酬 · 籌碼（±5 交易日）
                   </h3>
                   <EventsTable events={eventsForSelected} />
                 </div>
                 <div className="min-w-0 xl:w-[30rem] xl:shrink-0">
-                  <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                  <h3 className="mb-2 font-mono text-sm font-semibold text-white">
                     聚合統計
                   </h3>
                   <StatsTable stats={stats} />
@@ -246,6 +279,7 @@ export default function App() {
           )}
         </main>
       </div>
+      )}
 
       <LogDrawer open={logOpen} onOpenChange={setLogOpen} job={job} />
     </div>

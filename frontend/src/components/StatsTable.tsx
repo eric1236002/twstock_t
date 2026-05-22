@@ -30,8 +30,8 @@ export function StatsTable({ stats }: { stats: Stats }) {
 
   return (
     <div className="overflow-auto rounded border border-slate-800">
-      <table className="w-full font-mono text-xs">
-        <thead className="bg-slate-900/60 text-[10px] uppercase tracking-widest text-slate-500">
+      <table className="w-full font-mono text-sm">
+        <thead className="bg-slate-900/60 text-[10px] uppercase tracking-widest text-slate-400">
           <tr>
             <th className="px-3 py-2 text-left">類型</th>
             <th className="px-3 py-2 text-left">窗口</th>
@@ -42,14 +42,14 @@ export function StatsTable({ stats }: { stats: Stats }) {
         </thead>
         <tbody className="divide-y divide-slate-800/60">
           {rows.map((r, i) => (
-            <tr key={i} className="text-slate-300">
+            <tr key={i} className="text-white">
               <td className="px-3 py-2">
                 <div className="flex items-center gap-1">
                   <span
                     className={
                       "rounded px-1.5 py-0.5 text-[10px] " +
                       (r.cat.includes("增資")
-                        ? "bg-cyan-500/15 text-cyan-400"
+                        ? "bg-cyan-500/25 text-cyan-300"
                         : "bg-amber-500/15 text-amber-400")
                     }
                   >
@@ -67,8 +67,8 @@ export function StatsTable({ stats }: { stats: Stats }) {
                   </span>
                 </div>
               </td>
-              <td className="px-3 py-2 text-slate-400">{r.window}</td>
-              <td className="px-3 py-2 text-right">{r.n}</td>
+              <td className="px-3 py-2 text-white">{r.window}</td>
+              <td className="px-3 py-2 text-right text-white">{r.n}</td>
               <td className={"px-3 py-2 text-right " + retCls(r.ret)}>
                 {(r.ret > 0 ? "+" : "") + r.ret.toFixed(2)}%
               </td>

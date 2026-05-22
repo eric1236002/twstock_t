@@ -67,7 +67,15 @@ def _fetch_code(code: str, market: str, year: int, seamon: int | str, proxy_url:
         }
         resp = client.post(DOC_URL, data=payload)
         resp.raise_for_status()
-        sp = BeautifulSoup(resp.text, "html.parser")
+        text = resp.text
+        # 區分三種回應：成功頁一定有表頭「資料細節」；真的沒資料會顯示
+        # 「查無所需資料」；兩者皆無 = 被限流／錯誤頁（HTTP 200 但無內容），
+        # 視為軟失敗丟例外讓 tenacity 重試（否則該檔會被靜默漏抓）。
+        if "資料細節" not in text:
+            if "查無所需資料" in text:
+                return []
+            raise RuntimeError(f"軟失敗（無表頭，len={len(text)}）")
+        sp = BeautifulSoup(text, "html.parser")
         out: list[dict] = []
         for tr in sp.find_all("tr"):
             cells = tr.find_all("td")

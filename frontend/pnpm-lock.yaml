@@ -201,6 +201,10 @@ importers:
       vite:
         specifier: ^8.0.12
         version: 8.0.13(@types/node@24.12.4)(jiti@1.21.7)(yaml@2.9.0)
+    optionalDependencies:
+      lightningcss-darwin-arm64:
+        specifier: 1.32.0
+        version: 1.32.0
 
 packages:
 

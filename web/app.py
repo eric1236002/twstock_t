@@ -139,7 +139,7 @@ def get_backtest(code: str):
 
 
 @app.get("/api/chip/{code}")
-def get_chip(code: str, days: int = Query(540, ge=30, le=365 * 5)):
+def get_chip(code: str, days: int = Query(540, ge=30, le=365 * 10)):
     end = dt.date.today()
     start = end - dt.timedelta(days=days)
     try:
@@ -160,6 +160,110 @@ def get_cb(code: str):
     except Exception:  # noqa: BLE001
         pass
     return {"code": code, "data": cb.get_cb(code)}
+
+
+@app.get("/api/overview")
+def get_overview(
+    year: str | None = Query(None),
+    month: str | None = Query(None),
+):
+    """Overview: all stocks with events for the given month/year, with cached price change."""
+    sql = "SELECT code, market, doc_type, filed_at FROM events WHERE 1=1"
+    args: list = []
+    if year:
+        sql += " AND substr(filed_at,1,4) = ?"
+        args.append(year)
+    if month:
+        sql += " AND source_month = ?"
+        args.append(month)
+
+    with db.connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+        years = [r["y"] for r in conn.execute(
+            "SELECT DISTINCT substr(filed_at,1,4) AS y FROM events ORDER BY y DESC"
+        )]
+        months = [r["source_month"] for r in conn.execute(
+            "SELECT DISTINCT source_month FROM events "
+            "WHERE source_month IS NOT NULL ORDER BY source_month"
+        )]
+
+    code_data: dict = {}
+    for r in rows:
+        code = r["code"]
+        if code not in code_data:
+            code_data[code] = {
+                "code": code,
+                "market": r["market"],
+                "has_bond": False,
+                "has_issue": False,
+                "event_count": 0,
+                "last_event": r["filed_at"],
+            }
+        d = code_data[code]
+        d["event_count"] += 1
+        if r["filed_at"] > d["last_event"]:
+            d["last_event"] = r["filed_at"]
+        if "公司債" in r["doc_type"]:
+            d["has_bond"] = True
+        if "增資" in r["doc_type"]:
+            d["has_issue"] = True
+
+    codes_list = list(code_data.keys())
+
+    # Recent 20-trading-day price change from kline cache — no new API calls
+    price_changes: dict[str, float | None] = {}
+    if codes_list:
+        with db.connect() as conn:
+            placeholders = ",".join("?" * len(codes_list))
+            kline_rows = conn.execute(
+                f"SELECT code, close FROM kline "
+                f"WHERE code IN ({placeholders}) "
+                f"AND date >= date('now', '-60 days') "
+                f"ORDER BY code, date",
+                codes_list,
+            ).fetchall()
+        by_code: dict[str, list] = {}
+        for r in kline_rows:
+            by_code.setdefault(r["code"], []).append(r["close"])
+        for code, closes in by_code.items():
+            if len(closes) >= 20 and closes[-20]:
+                price_changes[code] = round(
+                    (closes[-1] - closes[-20]) / closes[-20] * 100, 2
+                )
+
+    try:
+        names.ensure_names()
+        name_map = names.get_names(codes_list)
+    except Exception:  # noqa: BLE001
+        name_map = {}
+
+    result = []
+    for code, d in code_data.items():
+        result.append({
+            "code": code,
+            "market": d["market"],
+            "name": name_map.get(code),
+            "has_bond": d["has_bond"],
+            "has_issue": d["has_issue"],
+            "event_count": d["event_count"],
+            "last_event": d["last_event"],
+            "price_change_pct": price_changes.get(code),
+        })
+
+    result.sort(key=lambda x: (x["price_change_pct"] is None, -(x["price_change_pct"] or 0)))
+
+    with_price = [x["price_change_pct"] for x in result if x["price_change_pct"] is not None]
+    return {
+        "stocks": result,
+        "summary": {
+            "total": len(result),
+            "cb_count": sum(1 for x in result if x["has_bond"]),
+            "issue_count": sum(1 for x in result if x["has_issue"]),
+            "avg_price_change": round(sum(with_price) / len(with_price), 2) if with_price else None,
+        },
+        "years": years,
+        "months": months,
+    }
 
 
 @app.get("/api/quota")

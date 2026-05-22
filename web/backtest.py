@@ -137,4 +137,5 @@ def event_returns(code: str) -> dict:
                 "win_rate_pct": round(wins / len(lst) * 100, 1),
             }
 
+    event_rows.sort(key=lambda x: x["filed_at"], reverse=True)
     return {"code": code, "events": event_rows, "stats": agg}

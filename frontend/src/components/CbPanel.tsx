@@ -13,11 +13,11 @@ function pct(v: number | null): string {
 export function CbPanel({ cb }: { cb: CB[] }) {
   return (
     <div>
-      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
+      <h3 className="mb-2 font-mono text-sm font-semibold text-white">
         可轉債 · 轉換價（發行時）
       </h3>
       {cb.length === 0 ? (
-        <div className="rounded border border-slate-800 px-3 py-4 text-center text-xs text-slate-600">
+        <div className="rounded border border-slate-800 px-3 py-4 text-center text-sm text-slate-400">
           無流通中可轉債
         </div>
       ) : (
