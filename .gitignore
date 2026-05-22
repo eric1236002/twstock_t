@@ -12,3 +12,4 @@ node_modules/
 .parcel-cache/
 frontend/dist/
 .claude/
+.DS_Store
