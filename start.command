@@ -15,7 +15,13 @@ else
     source .venv/bin/activate
 fi
 
-[ -f "twstock.db" ] || echo "[warn] 找不到 twstock.db，資料庫是空的；請複製舊機器的 twstock.db 過來"
+if [ ! -f "twstock.db" ]; then
+    if grep -q "TURSO_DATABASE_URL" .env 2>/dev/null; then
+        echo "[info] 使用 Turso 雲端資料庫，kline 快取將在首次查詢時自動建立"
+    else
+        echo "[warn] 找不到 twstock.db，資料庫是空的；請複製舊機器的 twstock.db 過來"
+    fi
+fi
 [ -f ".env" ] || echo "[warn] 找不到 .env，爬蟲與 FinMind 會失效；請建立 .env 並填入 token / proxy"
 
 echo

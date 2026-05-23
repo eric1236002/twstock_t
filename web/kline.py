@@ -11,7 +11,7 @@ DATASET = "TaiwanStockPrice"  # PriceAdj (還原) requires backer; raw price is 
 
 
 def _cached_bounds(code: str) -> tuple[dt.date, dt.date] | None:
-    with db.connect() as conn:
+    with db.connect_local() as conn:
         row = conn.execute(
             "SELECT MIN(date) AS mn, MAX(date) AS mx FROM kline WHERE code=?", (code,)
         ).fetchone()
@@ -32,7 +32,7 @@ def _fetch_into_cache(code: str, start: dt.date, end: dt.date) -> int:
 def _insert_rows(code: str, rows: list[dict]) -> int:
     if not rows:
         return 0
-    with db.connect() as conn:
+    with db.connect_local() as conn:
         cur = conn.executemany(
             "INSERT OR REPLACE INTO kline (code, date, open, high, low, close, volume) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -75,7 +75,7 @@ def get_kline(code: str, start: dt.date | None = None, end: dt.date | None = Non
     if start is None:
         start = end - dt.timedelta(days=365 * 2)
     ensure_range(code, start, end)
-    with db.connect() as conn:
+    with db.connect_local() as conn:
         rows = conn.execute(
             "SELECT date, open, high, low, close, volume FROM kline "
             "WHERE code=? AND date BETWEEN ? AND ? ORDER BY date",

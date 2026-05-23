@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Backtest, type Candle, type CB, type ChipDay, type EventRow, type Quota, type ScrapeJob, type Summary } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { api, type Backtest, type Candle, type CB, type ChipDay, type EventRow, type Quota, type Summary } from "@/lib/api";
 import { Header } from "@/components/Header";
-import { LogDrawer } from "@/components/LogDrawer";
 import { Sidebar } from "@/components/Sidebar";
 import { Overview } from "@/components/Overview";
+import { ScrapePage } from "@/components/ScrapePage";
 import { KlineChart, CHIP_LABELS, chartHeightForPanes, type ChipMode } from "@/components/KlineChart";
 import { EventsTable } from "@/components/EventsTable";
 import { StatsTable } from "@/components/StatsTable";
 import { CbPanel } from "@/components/CbPanel";
 
-type Tab = "overview" | "detail";
+type Tab = "overview" | "detail" | "scrape";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -27,11 +27,6 @@ export default function App() {
   const [backtest, setBacktest] = useState<Backtest | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
-
-  // Scrape job state
-  const [jobId, setJobId] = useState<number | null>(null);
-  const [job, setJob] = useState<ScrapeJob | null>(null);
-  const [logOpen, setLogOpen] = useState(false);
 
   const refreshAll = useCallback(async () => {
     const [s, e, q] = await Promise.all([
@@ -76,38 +71,6 @@ export default function App() {
       });
   }, [selectedCode]);
 
-  // Scrape job polling
-  const pollRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!jobId) return;
-    const tick = async () => {
-      try {
-        const j = await api.scrapeJob(jobId);
-        setJob(j);
-        if (j.status === "running") {
-          pollRef.current = window.setTimeout(tick, 1500);
-        } else {
-          refreshAll().catch(console.error);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    };
-    tick();
-    return () => {
-      if (pollRef.current) {
-        clearTimeout(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [jobId, refreshAll]);
-
-  const startScrape = useCallback(async () => {
-    const { job_id } = await api.startScrape();
-    setJobId(job_id);
-    setLogOpen(true);
-  }, []);
-
   const handleOverviewSelect = useCallback((code: string) => {
     setSelectedCode(code);
     setActiveTab("detail");
@@ -115,7 +78,6 @@ export default function App() {
 
   const eventsForSelected = backtest?.events ?? [];
   const stats = backtest?.stats ?? {};
-  const scraping = job?.status === "running";
   const selectedName = selectedCode
     ? summary?.codes.find((c) => c.code === selectedCode)?.name ?? null
     : null;
@@ -137,22 +99,19 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
-      <Header
-        quota={quota}
-        scraping={scraping}
-        onScrape={startScrape}
-        onToggleLog={() => setLogOpen(true)}
-        hasLog={job !== null}
-      />
+      <Header quota={quota} />
 
       {/* Tab navigation */}
       <div className="flex shrink-0 border-b border-slate-800 px-4">
         {tabBtn("overview", "總覽")}
         {tabBtn("detail", "詳細分析")}
+        {tabBtn("scrape", "爬取")}
       </div>
 
       {activeTab === "overview" ? (
         <Overview onSelectCode={handleOverviewSelect} />
+      ) : activeTab === "scrape" ? (
+        <ScrapePage />
       ) : (
       <div className="flex min-h-0 flex-1">
         <Sidebar
@@ -281,7 +240,6 @@ export default function App() {
       </div>
       )}
 
-      <LogDrawer open={logOpen} onOpenChange={setLogOpen} job={job} />
     </div>
   );
 }

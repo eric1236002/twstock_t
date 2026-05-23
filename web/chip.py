@@ -35,7 +35,7 @@ def _missing_ranges(table: str, code: str, start: dt.date, end: dt.date) -> list
     fetch contiguous ranges). Returns the head gap (before min) and/or tail gap
     (after max) that still need fetching.
     """
-    with db.connect() as conn:
+    with db.connect_local() as conn:
         row = conn.execute(
             f"SELECT MIN(date) AS mn, MAX(date) AS mx FROM {table} WHERE code=?",
             (code,),
@@ -75,7 +75,7 @@ def ensure_institutional(code: str, start: dt.date, end: dt.date) -> int:
             bucket[cat] += net
         if not agg:
             continue
-        with db.connect() as conn:
+        with db.connect_local() as conn:
             cur = conn.executemany(
                 "INSERT OR REPLACE INTO institutional "
                 "(code, date, foreign_net, trust_net, dealer_net) VALUES (?, ?, ?, ?, ?)",
@@ -104,7 +104,7 @@ def ensure_margin(code: str, start: dt.date, end: dt.date) -> int:
         )
         if not rows:
             continue
-        with db.connect() as conn:
+        with db.connect_local() as conn:
             cur = conn.executemany(
                 "INSERT OR REPLACE INTO margin "
                 "(code, date, margin_balance, short_balance) VALUES (?, ?, ?, ?)",
@@ -127,7 +127,7 @@ def ensure_margin(code: str, start: dt.date, end: dt.date) -> int:
 
 def institutional_window(code: str, start: str, end: str) -> dict:
     """Sum net buys across [start, end] inclusive."""
-    with db.connect() as conn:
+    with db.connect_local() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(foreign_net),0) AS f, "
             "COALESCE(SUM(trust_net),0) AS t, "
@@ -144,7 +144,7 @@ def institutional_window(code: str, start: str, end: str) -> dict:
 
 def margin_change(code: str, start: str, end: str) -> dict:
     """Margin/short balance delta between first and last available day in window."""
-    with db.connect() as conn:
+    with db.connect_local() as conn:
         first = conn.execute(
             "SELECT margin_balance, short_balance FROM margin "
             "WHERE code=? AND date BETWEEN ? AND ? ORDER BY date LIMIT 1",
@@ -168,7 +168,7 @@ def margin_change(code: str, start: str, end: str) -> dict:
 def daily_series(code: str, start: dt.date, end: dt.date) -> list[dict]:
     """Per-day institutional nets (張) + margin/short balance, merged by date."""
     s, e = start.isoformat(), end.isoformat()
-    with db.connect() as conn:
+    with db.connect_local() as conn:
         inst = conn.execute(
             "SELECT date, foreign_net, trust_net, dealer_net FROM institutional "
             "WHERE code=? AND date BETWEEN ? AND ? ORDER BY date",

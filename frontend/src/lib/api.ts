@@ -159,7 +159,12 @@ export const api = {
     if (params.month) qs.set("month", params.month);
     return j<OverviewResponse>(`/api/overview?${qs}`);
   },
-  startScrape: () => j<{ job_id: number }>("/api/scrape", { method: "POST" }),
+  startScrape: (params?: { year?: number; month?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.year) qs.set("year", String(params.year));
+    if (params?.month) qs.set("month", String(params.month));
+    return j<{ job_id: number }>(`/api/scrape?${qs}`, { method: "POST" });
+  },
   scrapeJob: (id: number, since = 0) =>
     j<ScrapeJob>(`/api/scrape/${id}?since=${since}`),
 };

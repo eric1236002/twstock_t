@@ -19,7 +19,12 @@ if not exist ".venv\Scripts\activate.bat" (
 )
 
 if not exist "twstock.db" (
-    echo [warn] 找不到 twstock.db，資料庫是空的；請把舊機器的 twstock.db 複製過來
+    findstr /C:"TURSO_DATABASE_URL" .env >nul 2>&1
+    if errorlevel 1 (
+        echo [warn] 找不到 twstock.db，資料庫是空的；請把舊機器的 twstock.db 複製過來
+    ) else (
+        echo [info] 使用 Turso 雲端資料庫，kline 快取將在首次查詢時自動建立
+    )
 )
 if not exist ".env" (
     echo [warn] 找不到 .env，爬蟲與 FinMind 會失效；請建立 .env 並填入 token / proxy

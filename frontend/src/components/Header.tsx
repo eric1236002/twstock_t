@@ -1,15 +1,10 @@
-import { Button } from "@/components/ui/button";
 import type { Quota } from "@/lib/api";
 
 type Props = {
   quota: Quota | null;
-  scraping: boolean;
-  onScrape: () => void;
-  onToggleLog: () => void;
-  hasLog: boolean;
 };
 
-export function Header({ quota, scraping, onScrape, onToggleLog, hasLog }: Props) {
+export function Header({ quota }: Props) {
   const pct = quota && quota.limit > 0 ? (quota.remaining / quota.limit) * 100 : 100;
   const color =
     pct > 40 ? "text-emerald-400" : pct > 15 ? "text-amber-400" : "text-rose-400";
@@ -25,30 +20,15 @@ export function Header({ quota, scraping, onScrape, onToggleLog, hasLog }: Props
         </h1>
       </div>
 
-      <div className="flex items-center gap-4">
-        {quota && (
-          <div className="flex items-center gap-2 font-mono text-xs">
-            <span className="text-slate-500">FinMind</span>
-            <span className={color}>
-              {quota.remaining}/{quota.limit}
-            </span>
-            <span className="text-slate-600">({quota.tokens} tokens)</span>
-          </div>
-        )}
-        {hasLog && (
-          <Button size="sm" variant="outline" onClick={onToggleLog}>
-            Log
-          </Button>
-        )}
-        <Button
-          size="sm"
-          onClick={onScrape}
-          disabled={scraping}
-          className="bg-amber-500 text-slate-950 hover:bg-amber-400"
-        >
-          {scraping ? "抓取中…" : "一鍵抓取"}
-        </Button>
-      </div>
+      {quota && (
+        <div className="flex items-center gap-2 font-mono text-xs">
+          <span className="text-slate-500">FinMind</span>
+          <span className={color}>
+            {quota.remaining}/{quota.limit}
+          </span>
+          <span className="text-slate-600">({quota.tokens} tokens)</span>
+        </div>
+      )}
     </header>
   );
 }

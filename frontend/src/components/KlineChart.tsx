@@ -188,21 +188,30 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
 
     // markers encode category (公司債/增資 by colour) + status (稿本/生效):
     //   稿本(draft) → above bar, arrow down ; 生效(effective) → below bar, arrow up
-    const candleDates = new Set(candles.map((c) => c.date));
+    // Marker date = filing date; if weekend/holiday, advance to next trading day in kline.
+    // If kline doesn't have that date yet (too recent) → skip, no fallback.
+    const sortedCandleDates = candles.map((c) => c.date); // already ASC from API
+    const firstDateOnOrAfter = (d: string): string | null => {
+      let lo = 0, hi = sortedCandleDates.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (sortedCandleDates[mid] < d) lo = mid + 1; else hi = mid; }
+      return lo < sortedCandleDates.length ? sortedCandleDates[lo] : null;
+    };
     const markers: SeriesMarker<Time>[] = events
-      .filter((e) => e.anchor_date && candleDates.has(e.anchor_date))
-      .map((e) => {
+      .flatMap((e) => {
+        if (!e.filed_at) return [];
+        const markerDate = firstDateOnOrAfter(e.filed_at.slice(0, 10));
+        if (!markerDate) return [];
         const isIssue = e.doc_type.includes("增資");
         const effective =
           e.case_status === "生效" || (e.case_status == null && !e.doc_type.includes("稿本"));
         const cat = isIssue ? "增" : "債";
-        return {
-          time: e.anchor_date as Time,
+        return [{
+          time: markerDate as Time,
           position: effective ? "belowBar" : "aboveBar",
           color: isIssue ? "#06b6d4" : "#fbf707",
           shape: effective ? "arrowUp" : "arrowDown",
           text: cat + (effective ? "效" : "稿"),
-        };
+        }];
       });
     markers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
 
