@@ -103,6 +103,7 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
   const watermarkRef = useRef<ITextWatermarkPluginApi<Time>[]>([]);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const cbLinesRef = useRef<IPriceLine[]>([]);
+  const fittedCandlesRef = useRef<Candle[] | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -163,6 +164,7 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
       watermarkRef.current = [];
       markersRef.current = null;
       cbLinesRef.current = [];
+      fittedCandlesRef.current = null;
     };
   }, []);
 
@@ -185,10 +187,18 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
         color: c.close >= c.open ? "#7f1d1d" : "#14532d",
       }))
     );
-    chartRef.current?.timeScale().fitContent();
+    // fitContent moved to the markers effect: it must run *after* markers are
+    // (re)created so the fit/repaint pass positions them. Otherwise on the
+    // cached-revisit path (candles + events set in one commit) markers are
+    // built after the fit and stick to the top edge. See markers effect below.
   }, [candles]);
 
-  // Markers — separate effect so fitContent isn't re-triggered when events arrive later
+  // Markers — recreated on candle/event change. The marker plugin caches its
+  // bar positions; if it's (re)built in the same synchronous commit that sets
+  // new candle data (the detailCache revisit path sets candles + events at
+  // once), it positions against the *previous* layout and the marker ends up
+  // clipped off the top. Deferring to the next animation frame lets the chart
+  // apply the new data/scale first, so positions are correct on every path.
   useEffect(() => {
     if (!seriesRef.current) return;
     const sortedCandleDates = candles.map((c) => c.date);
@@ -219,8 +229,21 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
         }];
       });
     markers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-    markersRef.current?.detach();
-    markersRef.current = createSeriesMarkers(seriesRef.current, markers);
+    const series = seriesRef.current;
+    // Fit first (time scale only) so the candle layout the markers anchor to is
+    // current, but only when the candle set changed — events-only updates must
+    // not reset the user's zoom.
+    if (fittedCandlesRef.current !== candles) {
+      fittedCandlesRef.current = candles;
+      chartRef.current?.timeScale().fitContent();
+    }
+    // Build markers on the next frame, after the chart has applied the new
+    // data/scale, so the plugin computes positions against the current layout.
+    const raf = requestAnimationFrame(() => {
+      markersRef.current?.detach();
+      markersRef.current = createSeriesMarkers(series, markers);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [candles, events]);
 
   // 可轉債轉換價：每檔 CB 一條水平虛線（右軸標籤＝簡稱）。
