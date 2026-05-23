@@ -192,6 +192,11 @@ CREATE TABLE IF NOT EXISTS kline (
     PRIMARY KEY (code, date)
 );
 
+CREATE TABLE IF NOT EXISTS kline_meta (
+    code TEXT PRIMARY KEY,
+    last_accessed DATE NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS institutional (
     code TEXT NOT NULL,
     date DATE NOT NULL,

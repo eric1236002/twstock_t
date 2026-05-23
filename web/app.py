@@ -18,6 +18,10 @@ app = FastAPI(title="twstock 稿本爬蟲 + K 線回測")
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    removed = kline.cleanup_old() + chip.cleanup_old()
+    if removed:
+        import logging
+        logging.getLogger(__name__).info("kline/chip cache cleanup: removed %d old rows", removed)
 
 
 @app.get("/api/events")
@@ -213,7 +217,7 @@ def get_overview(
     # Recent 20-trading-day price change from kline cache — no new API calls
     price_changes: dict[str, float | None] = {}
     if codes_list:
-        with db.connect() as conn:
+        with db.connect_local() as conn:
             placeholders = ",".join("?" * len(codes_list))
             kline_rows = conn.execute(
                 f"SELECT code, close FROM kline "

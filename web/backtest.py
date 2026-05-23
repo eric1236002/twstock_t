@@ -47,14 +47,6 @@ def event_returns(code: str) -> dict:
     end = min(dt.date.today(), latest + dt.timedelta(days=180))
 
     ohlc = kline.get_kline(code, start=start, end=end)
-    # Prefetch chip data for same range (single FinMind call each, cached after)
-    try:
-        chip.ensure_institutional(code, start, end)
-        chip.ensure_margin(code, start, end)
-    except Exception as e:  # noqa: BLE001
-        # Chip data is optional; don't fail backtest if quota out
-        import logging
-        logging.getLogger(__name__).warning("chip ensure failed: %s", e)
 
     dates = [r["date"] for r in ohlc]
     opens = [r["open"] for r in ohlc]

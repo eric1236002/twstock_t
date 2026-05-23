@@ -163,6 +163,17 @@ def margin_change(code: str, start: str, end: str) -> dict:
     }
 
 
+# ---- Cache cleanup --------------------------------------------------------
+
+def cleanup_old(keep_days: int = 1825) -> int:
+    """Delete institutional + margin rows older than keep_days. Returns deleted count."""
+    cutoff = (dt.date.today() - dt.timedelta(days=keep_days)).isoformat()
+    with db.connect_local() as conn:
+        c1 = conn.execute("DELETE FROM institutional WHERE date < ?", (cutoff,))
+        c2 = conn.execute("DELETE FROM margin WHERE date < ?", (cutoff,))
+    return c1.rowcount + c2.rowcount
+
+
 # ---- Daily series (for sub-pane histograms) ------------------------------
 
 def daily_series(code: str, start: dt.date, end: dt.date) -> list[dict]:
