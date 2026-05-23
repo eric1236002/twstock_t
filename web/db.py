@@ -175,6 +175,10 @@ class _Cursor:
         return getattr(self._c, "rowcount", -1)
 
     @property
+    def lastrowid(self) -> int | None:
+        return getattr(self._c, "lastrowid", None)
+
+    @property
     def description(self) -> Any:
         return getattr(self._c, "description", None)
 
@@ -293,6 +297,69 @@ def roc_to_iso(roc: str) -> str | None:
         hh, mm, ss = int(m.group(4)), int(m.group(5)), int(m.group(6))
         return f"{y:04d}-{mo:02d}-{d:02d} {hh:02d}:{mm:02d}:{ss:02d}"
     return f"{y:04d}-{mo:02d}-{d:02d} 00:00:00"
+
+
+def sync_from_turso() -> int:
+    """Pull events from Turso that are missing locally. Returns inserted count.
+
+    Fast path: compare COUNT + MAX(filed_at). Only does a full row fetch when
+    the numbers differ. Runs safely in a background thread at startup.
+    """
+    turso = _connect_turso()
+    if not turso:
+        return 0
+    try:
+        tc = turso.execute("SELECT COUNT(*), MAX(filed_at) FROM events").fetchone()
+        turso_count, turso_latest = int(tc[0] or 0), tc[1]
+
+        with connect() as conn:
+            lc = conn.execute("SELECT COUNT(*), MAX(filed_at) FROM events").fetchone()
+            local_count, local_latest = int(lc[0] or 0), lc[1]
+
+        if turso_count <= local_count:
+            logger.debug("sync_from_turso: local=%d >= turso=%d, skip", local_count, turso_count)
+            return 0
+
+        logger.info("sync_from_turso: turso=%d local=%d, syncing…", turso_count, local_count)
+
+        # Collect local file_links for dedup
+        with connect() as conn:
+            local_links: set[str] = {
+                str(r[0]) for r in conn.execute(
+                    "SELECT file_link FROM events WHERE file_link IS NOT NULL"
+                ).fetchall()
+            }
+
+        # Pull all rows from Turso and filter to missing ones
+        turso_rows = turso.execute(
+            "SELECT code, market, doc_type, case_status, file_link, filed_at, source_month "
+            "FROM events"
+        ).fetchall()
+
+        new_rows = [
+            (r["code"], r["market"], r["doc_type"], r["case_status"],
+             r["file_link"], r["filed_at"], r["source_month"])
+            for r in turso_rows
+            if r["file_link"] and str(r["file_link"]) not in local_links
+        ]
+
+        if not new_rows:
+            return 0
+
+        with connect() as conn:
+            cur = conn.executemany(
+                "INSERT OR IGNORE INTO events "
+                "(code, market, doc_type, case_status, file_link, filed_at, source_month) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                new_rows,
+            )
+            inserted = cur.rowcount
+
+        logger.info("sync_from_turso: inserted %d rows", inserted)
+        return inserted
+    except Exception as e:
+        logger.warning("sync_from_turso failed: %s", e)
+        return 0
 
 
 def _sync_events_to_turso(rows: list[tuple]) -> None:

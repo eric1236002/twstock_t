@@ -9,13 +9,14 @@ export function ScrapePage() {
   const [year, setYear] = useState(ROC_YEAR);
   const [month, setMonth] = useState<number | "all">(THIS_MONTH);
   const [job, setJob] = useState<ScrapeJob | null>(null);
+  const [logLines, setLogLines] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const logRef = useRef<HTMLPreElement | null>(null);
   const pollRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [job?.log_total]);
+  }, [logLines.length]);
 
   useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
 
@@ -23,6 +24,7 @@ export function ScrapePage() {
     pollRef.current = window.setTimeout(async () => {
       try {
         const j = await api.scrapeJob(id, since);
+        if (j.log.length > 0) setLogLines((prev) => [...prev, ...j.log]);
         setJob(j);
         if (j.status === "running") poll(id, j.log_total);
         else setRunning(false);
@@ -36,6 +38,7 @@ export function ScrapePage() {
     if (pollRef.current) clearTimeout(pollRef.current);
     setRunning(true);
     setJob(null);
+    setLogLines([]);
     try {
       const { job_id } = await api.startScrape({
         year,
@@ -107,7 +110,7 @@ export function ScrapePage() {
         ref={logRef}
         className="min-h-0 flex-1 overflow-auto rounded border border-slate-800 bg-black p-4 font-mono text-xs leading-relaxed text-slate-300"
       >
-        {job?.log.join("\n") || "尚未開始…"}
+        {logLines.length > 0 ? logLines.join("\n") : "尚未開始…"}
       </pre>
     </div>
   );

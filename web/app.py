@@ -17,11 +17,14 @@ app = FastAPI(title="twstock 稿本爬蟲 + K 線回測")
 
 @app.on_event("startup")
 def _startup() -> None:
+    import logging, threading
+    log = logging.getLogger(__name__)
     db.init_db()
     removed = kline.cleanup_old() + chip.cleanup_old()
     if removed:
-        import logging
-        logging.getLogger(__name__).info("kline/chip cache cleanup: removed %d old rows", removed)
+        log.info("kline/chip cache cleanup: removed %d old rows", removed)
+    # Background: pull any events from Turso that are missing locally
+    threading.Thread(target=db.sync_from_turso, daemon=True).start()
 
 
 @app.get("/api/events")
@@ -99,6 +102,13 @@ def start_scrape(
 @app.post("/api/update-codes")
 def update_codes():
     return codes.update_code_lists()
+
+
+@app.post("/api/sync-from-cloud")
+def sync_from_cloud():
+    """Manually pull events from Turso that are missing locally."""
+    inserted = db.sync_from_turso()
+    return {"inserted": inserted}
 
 
 @app.get("/api/scrape/{job_id}")
