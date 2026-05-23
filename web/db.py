@@ -1,13 +1,17 @@
-"""SQLite / Turso schema and connection helpers.
+"""SQLite schema and connection helpers.
 
-When TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are present in the environment
-the app uses Turso (libSQL); otherwise it falls back to the local SQLite file.
+Local SQLite is the primary store for all tables.
+Turso (libSQL) is used as a backup: new events are synced there
+asynchronously after each scrape, if TURSO_DATABASE_URL + TURSO_AUTH_TOKEN
+are present in the environment.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -15,9 +19,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "twstock.db"
 
+# Full local schema — all tables live here.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +69,72 @@ CREATE TABLE IF NOT EXISTS scrape_jobs (
     log TEXT,
     rows_inserted INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS kline (
+    code TEXT NOT NULL,
+    date DATE NOT NULL,
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    volume INTEGER,
+    PRIMARY KEY (code, date)
+);
+
+CREATE TABLE IF NOT EXISTS kline_meta (
+    code TEXT PRIMARY KEY,
+    last_accessed DATE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS institutional (
+    code TEXT NOT NULL,
+    date DATE NOT NULL,
+    foreign_net INTEGER DEFAULT 0,
+    trust_net INTEGER DEFAULT 0,
+    dealer_net INTEGER DEFAULT 0,
+    PRIMARY KEY (code, date)
+);
+
+CREATE TABLE IF NOT EXISTS margin (
+    code TEXT NOT NULL,
+    date DATE NOT NULL,
+    margin_balance INTEGER DEFAULT 0,
+    short_balance INTEGER DEFAULT 0,
+    PRIMARY KEY (code, date)
+);
+
+CREATE TABLE IF NOT EXISTS news (
+    code TEXT NOT NULL,
+    published_at DATETIME NOT NULL,
+    title TEXT,
+    source TEXT,
+    link TEXT,
+    PRIMARY KEY (code, published_at, link)
+);
+
+CREATE TABLE IF NOT EXISTS news_fetched (
+    code TEXT NOT NULL,
+    date DATE NOT NULL,
+    PRIMARY KEY (code, date)
+);
+"""
+
+# Minimal Turso backup schema — only events need cloud backup.
+_TURSO_SCHEMA = """
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    market TEXT,
+    doc_type TEXT NOT NULL,
+    case_status TEXT,
+    file_link TEXT,
+    filed_at DATETIME NOT NULL,
+    source_month TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(code, file_link)
+);
+CREATE INDEX IF NOT EXISTS idx_events_code ON events(code);
+CREATE INDEX IF NOT EXISTS idx_events_filed_at ON events(filed_at);
 """
 
 
@@ -72,11 +145,10 @@ def _turso_creds() -> tuple[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
-# libSQL row/cursor/connection wrappers (mimic sqlite3.Row + context manager)
+# libSQL wrappers (used only for Turso backup writes)
 # ---------------------------------------------------------------------------
 
 class _Row:
-    """Dict-like row wrapper for libsql_experimental rows (which are plain tuples)."""
     __slots__ = ("_d",)
 
     def __init__(self, description: Any, row: Sequence) -> None:
@@ -125,9 +197,7 @@ class _Cursor:
             yield r
 
 
-class _Conn:
-    """Wraps libsql_experimental.Connection to behave like sqlite3.Connection."""
-
+class _TursoConn:
     def __init__(self, inner: Any) -> None:
         self._c = inner
 
@@ -145,7 +215,7 @@ class _Conn:
     def commit(self) -> None:
         self._c.commit()
 
-    def __enter__(self) -> "_Conn":
+    def __enter__(self) -> "_TursoConn":
         return self
 
     def __exit__(self, exc_type: Any, *_: Any) -> None:
@@ -158,69 +228,49 @@ def _split_sql(script: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public connection API
 # ---------------------------------------------------------------------------
 
-def connect() -> Any:
-    """Main connection: Turso when configured, else local SQLite.
-    Used by: events, cb, stock_names, scrape_jobs."""
-    creds = _turso_creds()
-    if creds:
-        import libsql_experimental as libsql  # type: ignore[import]
-        url, token = creds
-        return _Conn(libsql.connect(url, auth_token=token))
-    return connect_local()
-
-
-def connect_local() -> sqlite3.Connection:
-    """Always local SQLite — used by kline, institutional, margin."""
+def connect() -> sqlite3.Connection:
+    """Primary connection — always local SQLite."""
     conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-LOCAL_SCHEMA = """
-CREATE TABLE IF NOT EXISTS kline (
-    code TEXT NOT NULL,
-    date DATE NOT NULL,
-    open REAL,
-    high REAL,
-    low REAL,
-    close REAL,
-    volume INTEGER,
-    PRIMARY KEY (code, date)
-);
+def connect_local() -> sqlite3.Connection:
+    """Alias for connect() — kept for backward compatibility."""
+    return connect()
 
-CREATE TABLE IF NOT EXISTS kline_meta (
-    code TEXT PRIMARY KEY,
-    last_accessed DATE NOT NULL
-);
 
-CREATE TABLE IF NOT EXISTS institutional (
-    code TEXT NOT NULL,
-    date DATE NOT NULL,
-    foreign_net INTEGER DEFAULT 0,
-    trust_net INTEGER DEFAULT 0,
-    dealer_net INTEGER DEFAULT 0,
-    PRIMARY KEY (code, date)
-);
+def _connect_turso() -> _TursoConn | None:
+    creds = _turso_creds()
+    if not creds:
+        return None
+    try:
+        import libsql_experimental as libsql  # type: ignore[import]
+        url, token = creds
+        return _TursoConn(libsql.connect(url, auth_token=token))
+    except Exception as e:
+        logger.warning("Turso connect failed: %s", e)
+        return None
 
-CREATE TABLE IF NOT EXISTS margin (
-    code TEXT NOT NULL,
-    date DATE NOT NULL,
-    margin_balance INTEGER DEFAULT 0,
-    short_balance INTEGER DEFAULT 0,
-    PRIMARY KEY (code, date)
-);
-"""
 
+# ---------------------------------------------------------------------------
+# Schema init
+# ---------------------------------------------------------------------------
 
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
-    with connect_local() as conn:
-        conn.executescript(LOCAL_SCHEMA)
+    # Init Turso backup schema (best-effort)
+    turso = _connect_turso()
+    if turso:
+        try:
+            turso.executescript(_TURSO_SCHEMA)
+        except Exception as e:
+            logger.warning("Turso schema init failed: %s", e)
 
 
 def rebuild_events() -> None:
@@ -228,6 +278,10 @@ def rebuild_events() -> None:
         conn.execute("DROP TABLE IF EXISTS events")
         conn.executescript(SCHEMA)
 
+
+# ---------------------------------------------------------------------------
+# Data helpers
+# ---------------------------------------------------------------------------
 
 def roc_to_iso(roc: str) -> str | None:
     m = re.match(r"\s*(\d{2,3})/(\d{1,2})/(\d{1,2})(?:\s+(\d{2}):(\d{2}):(\d{2}))?", roc)
@@ -241,27 +295,57 @@ def roc_to_iso(roc: str) -> str | None:
     return f"{y:04d}-{mo:02d}-{d:02d} 00:00:00"
 
 
+def _sync_events_to_turso(rows: list[tuple]) -> None:
+    """Background: write newly inserted events to Turso as backup."""
+    turso = _connect_turso()
+    if not turso:
+        return
+    try:
+        turso.executemany(
+            "INSERT OR IGNORE INTO events "
+            "(code, market, doc_type, case_status, file_link, filed_at, source_month) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        logger.info("Turso backup: synced %d events", len(rows))
+    except Exception as e:
+        logger.warning("Turso sync failed: %s", e)
+
+
 def import_rows(rows: list[dict]) -> int:
+    """Insert scraped rows into local DB, then async-sync new ones to Turso."""
     inserted = 0
+    new_rows: list[tuple] = []
     with connect() as conn:
         for r in rows:
             filed_iso = roc_to_iso(r.get("filed_at", ""))
             if not filed_iso:
                 continue
             source_month = filed_iso[5:7]
+            params = (
+                r["code"],
+                r.get("market"),
+                r["doc_type"],
+                r.get("case_status"),
+                r.get("file_link"),
+                filed_iso,
+                source_month,
+            )
             cur = conn.execute(
                 "INSERT OR IGNORE INTO events "
                 "(code, market, doc_type, case_status, file_link, filed_at, source_month) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    r["code"],
-                    r.get("market"),
-                    r["doc_type"],
-                    r.get("case_status"),
-                    r.get("file_link"),
-                    filed_iso,
-                    source_month,
-                ),
+                params,
             )
+            if cur.rowcount > 0:
+                new_rows.append(params)
             inserted += cur.rowcount
+
+    if new_rows and _turso_creds():
+        threading.Thread(
+            target=_sync_events_to_turso,
+            args=(new_rows,),
+            daemon=True,
+        ).start()
+
     return inserted

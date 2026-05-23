@@ -166,7 +166,7 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
     };
   }, []);
 
-  // Price + volume + markers
+  // Price + volume — fitContent only when candles change
   useEffect(() => {
     if (!seriesRef.current || !volRef.current) return;
     seriesRef.current.setData(
@@ -185,12 +185,13 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
         color: c.close >= c.open ? "#7f1d1d" : "#14532d",
       }))
     );
+    chartRef.current?.timeScale().fitContent();
+  }, [candles]);
 
-    // markers encode category (公司債/增資 by colour) + status (稿本/生效):
-    //   稿本(draft) → above bar, arrow down ; 生效(effective) → below bar, arrow up
-    // Marker date = filing date; if weekend/holiday, advance to next trading day in kline.
-    // If kline doesn't have that date yet (too recent) → skip, no fallback.
-    const sortedCandleDates = candles.map((c) => c.date); // already ASC from API
+  // Markers — separate effect so fitContent isn't re-triggered when events arrive later
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    const sortedCandleDates = candles.map((c) => c.date);
     const firstDateOnOrAfter = (d: string): string | null => {
       let lo = 0, hi = sortedCandleDates.length;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (sortedCandleDates[mid] < d) lo = mid + 1; else hi = mid; }
@@ -199,8 +200,12 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
     const markers: SeriesMarker<Time>[] = events
       .flatMap((e) => {
         if (!e.filed_at) return [];
-        const markerDate = firstDateOnOrAfter(e.filed_at.slice(0, 10));
+        const filedDate = e.filed_at.slice(0, 10);
+        const markerDate = firstDateOnOrAfter(filedDate);
         if (!markerDate) return [];
+        // Skip if nearest candle is >7 days away (event predates kline range)
+        const diffDays = (Date.parse(markerDate) - Date.parse(filedDate)) / 86400000;
+        if (diffDays > 7) return [];
         const isIssue = e.doc_type.includes("增資");
         const effective =
           e.case_status === "生效" || (e.case_status == null && !e.doc_type.includes("稿本"));
@@ -214,11 +219,8 @@ export function KlineChart({ candles, events, chip, chipPanes, cb }: Props) {
         }];
       });
     markers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-
-    // 每次 setData 後重建 plugin，避免舊位置資訊造成 marker 跑版
     markersRef.current?.detach();
     markersRef.current = createSeriesMarkers(seriesRef.current, markers);
-    chartRef.current?.timeScale().fitContent();
   }, [candles, events]);
 
   // 可轉債轉換價：每檔 CB 一條水平虛線（右軸標籤＝簡稱）。

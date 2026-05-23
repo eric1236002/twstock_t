@@ -1,74 +1,120 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, type Backtest, type Candle, type CB, type ChipDay, type EventRow, type Quota, type Summary } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type Backtest, type Candle, type CB, type ChipDay, type EventDetail, type EventRow, type Quota, type Summary } from "@/lib/api";
+
+const EMPTY_EVENTS: EventDetail[] = [];
 import { Header } from "@/components/Header";
 import { Sidebar } from "@/components/Sidebar";
 import { Overview } from "@/components/Overview";
 import { ScrapePage } from "@/components/ScrapePage";
 import { KlineChart, CHIP_LABELS, chartHeightForPanes, type ChipMode } from "@/components/KlineChart";
 import { EventsTable } from "@/components/EventsTable";
-import { StatsTable } from "@/components/StatsTable";
 import { CbPanel } from "@/components/CbPanel";
 
 type Tab = "overview" | "detail" | "scrape";
+
+function loadFavorites(): Set<string> {
+  try {
+    const s = localStorage.getItem("twstock_favorites");
+    return s ? new Set(JSON.parse(s)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [summary, setSummary] = useState<Summary | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
-  const [year, setYear] = useState("");
-  const [month, setMonth] = useState("");
-  const [docType, setDocType] = useState("");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chip, setChip] = useState<ChipDay[]>([]);
   const [cb, setCb] = useState<CB[]>([]);
   const [chipPanes, setChipPanes] = useState<ChipMode[]>(["foreign", "trust", "short"]);
   const [backtest, setBacktest] = useState<Backtest | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadingKline, setLoadingKline] = useState(false);
+  const [loadingRest, setLoadingRest] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [favorites, setFavorites] = useState<Set<string>>(loadFavorites);
+
+  type DetailCache = { candles: Candle[]; backtest: Backtest; chip: ChipDay[]; cb: CB[] };
+  const detailCache = useRef<Map<string, DetailCache>>(new Map());
+
+  const toggleFavorite = useCallback((code: string) => {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      localStorage.setItem("twstock_favorites", JSON.stringify([...next]));
+      return next;
+    });
+  }, []);
 
   const refreshAll = useCallback(async () => {
     const [s, e, q] = await Promise.all([
       api.summary(),
-      api.events({ year, month, doc_type: docType }),
+      api.events(),
       api.quota().catch(() => null),
     ]);
     setSummary(s);
     setEvents(e);
     setQuota(q);
-  }, [year, month, docType]);
+  }, []);
 
   useEffect(() => {
     refreshAll().catch(console.error);
   }, [refreshAll]);
 
-  // Load detail when code selected
   useEffect(() => {
     if (!selectedCode) return;
-    setLoadingDetail(true);
+
+    const cached = detailCache.current.get(selectedCode);
+    if (cached) {
+      setCandles(cached.candles);
+      setBacktest(cached.backtest);
+      setChip(cached.chip);
+      setCb(cached.cb);
+      setDetailError(null);
+      return;
+    }
+
+    const code = selectedCode;
+    let cancelled = false;
+    const partial: Partial<DetailCache> = {};
+
+    const tryCache = () => {
+      if (partial.candles && partial.backtest && partial.chip && partial.cb)
+        detailCache.current.set(code, partial as DetailCache);
+    };
+
     setDetailError(null);
     setCandles([]);
     setChip([]);
     setCb([]);
     setBacktest(null);
-    Promise.all([
-      api.kline(selectedCode, 1460),
-      api.backtest(selectedCode),
-      api.chip(selectedCode, 1460),
-      api.cb(selectedCode),
-    ])
-      .then(([k, b, c, cbRes]) => {
-        setCandles(k.data);
-        setBacktest(b);
-        setChip(c.data);
-        setCb(cbRes.data);
+    setLoadingKline(true);
+    setLoadingRest(true);
+
+    // Stage 1: kline — shows chart as soon as ready
+    api.kline(code, 1460)
+      .then((k) => { if (cancelled) return; partial.candles = k.data; setCandles(k.data); tryCache(); })
+      .catch((err) => { if (!cancelled) setDetailError(String(err)); })
+      .finally(() => { if (!cancelled) setLoadingKline(false); });
+
+    // Stage 2: backtest + chip + cb in parallel
+    Promise.all([api.backtest(code), api.chip(code, 1460), api.cb(code)])
+      .then(([b, c, cbRes]) => {
+        if (cancelled) return;
+        partial.backtest = b; partial.chip = c.data; partial.cb = cbRes.data;
+        setBacktest(b); setChip(c.data); setCb(cbRes.data);
+        tryCache();
       })
-      .catch((err) => setDetailError(String(err)))
+      .catch((err) => { if (!cancelled) setDetailError(String(err)); })
       .finally(() => {
-        setLoadingDetail(false);
-        api.quota().then(setQuota).catch(() => {});
+        if (!cancelled) { setLoadingRest(false); api.quota().then(setQuota).catch(() => {}); }
       });
+
+    return () => { cancelled = true; };
   }, [selectedCode]);
 
   const handleOverviewSelect = useCallback((code: string) => {
@@ -76,8 +122,7 @@ export default function App() {
     setActiveTab("detail");
   }, []);
 
-  const eventsForSelected = backtest?.events ?? [];
-  const stats = backtest?.stats ?? {};
+  const eventsForSelected = backtest?.events ?? EMPTY_EVENTS;
   const selectedName = selectedCode
     ? summary?.codes.find((c) => c.code === selectedCode)?.name ?? null
     : null;
@@ -101,30 +146,31 @@ export default function App() {
     <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
       <Header quota={quota} />
 
-      {/* Tab navigation */}
       <div className="flex shrink-0 border-b border-slate-800 px-4">
         {tabBtn("overview", "總覽")}
         {tabBtn("detail", "詳細分析")}
         {tabBtn("scrape", "爬取")}
       </div>
 
-      {activeTab === "overview" ? (
-        <Overview onSelectCode={handleOverviewSelect} />
-      ) : activeTab === "scrape" ? (
+      {/* Overview tab — keep mounted to preserve state */}
+      <div className={activeTab === "overview" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+        <Overview events={events} summary={summary} onSelectCode={handleOverviewSelect} />
+      </div>
+
+      {/* Scrape tab */}
+      <div className={activeTab === "scrape" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
         <ScrapePage />
-      ) : (
-      <div className="flex min-h-0 flex-1">
+      </div>
+
+      {/* Detail tab */}
+      <div className={activeTab === "detail" ? "flex min-h-0 flex-1" : "hidden"}>
         <Sidebar
           summary={summary}
           events={events}
-          year={year}
-          month={month}
-          docType={docType}
           selectedCode={selectedCode}
-          onYear={setYear}
-          onMonth={setMonth}
-          onDocType={setDocType}
+          favorites={favorites}
           onPickCode={setSelectedCode}
+          onToggleFavorite={toggleFavorite}
         />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-slate-950">
@@ -155,9 +201,6 @@ export default function App() {
                 </div>
                 {detailError && (
                   <span className="font-mono text-xs text-rose-400">{detailError}</span>
-                )}
-                {loadingDetail && (
-                  <span className="font-mono text-xs text-amber-400">loading…</span>
                 )}
               </div>
 
@@ -204,42 +247,46 @@ export default function App() {
               </div>
 
               <div
-                className="shrink-0 border-b border-slate-800"
+                className="relative shrink-0 border-b border-slate-800"
                 style={{ height: chartHeightForPanes(chipPanes.length) }}
               >
-                <KlineChart
-                  candles={candles}
-                  events={eventsForSelected}
-                  chip={chip}
-                  chipPanes={chipPanes}
-                  cb={cb}
-                />
+                {loadingKline ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3">
+                    <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-700 border-t-amber-400" />
+                    <span className="font-mono text-sm text-slate-500">載入 K 線…</span>
+                  </div>
+                ) : (
+                  <KlineChart
+                    candles={candles}
+                    events={eventsForSelected}
+                    chip={chip}
+                    chipPanes={chipPanes}
+                    cb={cb}
+                  />
+                )}
               </div>
 
               <div className="p-4 pb-0">
                 <CbPanel cb={cb} />
               </div>
 
-              <div className="flex flex-col gap-4 p-4 xl:flex-row xl:items-start">
-                <div className="min-w-0 xl:flex-1">
-                  <h3 className="mb-2 font-mono text-sm font-semibold text-white">
-                    事件 · 後續報酬 · 籌碼（±5 交易日）
-                  </h3>
-                  <EventsTable events={eventsForSelected} />
-                </div>
-                <div className="min-w-0 xl:w-[30rem] xl:shrink-0">
-                  <h3 className="mb-2 font-mono text-sm font-semibold text-white">
-                    聚合統計
-                  </h3>
-                  <StatsTable stats={stats} />
-                </div>
+              <div className="p-4">
+                <h3 className="mb-2 font-mono text-sm font-semibold text-white">
+                  事件 · 後續報酬 · 籌碼（±5 交易日）
+                </h3>
+                {loadingRest ? (
+                  <div className="flex h-24 items-center justify-center gap-2">
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-700 border-t-amber-400" />
+                    <span className="font-mono text-xs text-slate-500">載入事件…</span>
+                  </div>
+                ) : (
+                  <EventsTable events={eventsForSelected} code={selectedCode} />
+                )}
               </div>
             </>
           )}
         </main>
       </div>
-      )}
-
     </div>
   );
 }

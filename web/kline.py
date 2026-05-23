@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 
 from . import db, finmind
 
@@ -13,6 +14,15 @@ DATASET = "TaiwanStockPrice"  # PriceAdj (還原) requires backer; raw price is 
 # Slot = (date, evening) where evening=True means hour >= 18.
 # Before 18:00 fetch once (cap at yesterday); after 18:00 allow one more fetch (cap at today).
 _last_tail_slot: dict[str, tuple[dt.date, bool]] = {}
+_tail_locks: dict[str, threading.Lock] = {}
+_tail_locks_mu = threading.Lock()
+
+
+def _tail_lock(code: str) -> threading.Lock:
+    with _tail_locks_mu:
+        if code not in _tail_locks:
+            _tail_locks[code] = threading.Lock()
+        return _tail_locks[code]
 
 
 def _current_slot() -> tuple[dt.date, bool]:
@@ -88,11 +98,12 @@ def ensure_range(code: str, start: dt.date, end: dt.date) -> int:
 
     if effective_end > mx:
         slot = _current_slot()
-        if _last_tail_slot.get(code) != slot:
-            inserted += _fetch_into_cache(code, mx + dt.timedelta(days=1), effective_end)
-            _last_tail_slot[code] = slot
-        else:
-            logger.debug("kline tail skipped (slot already fetched): %s mx=%s", code, mx)
+        with _tail_lock(code):
+            if _last_tail_slot.get(code) != slot:
+                inserted += _fetch_into_cache(code, mx + dt.timedelta(days=1), effective_end)
+                _last_tail_slot[code] = slot
+            else:
+                logger.debug("kline tail skipped (slot already fetched): %s mx=%s", code, mx)
 
     return inserted
 

@@ -4,11 +4,11 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, cb, chip, codes, db, finmind, kline, names, scraper_job
+from . import backtest, cb, chip, codes, db, finmind, kline, names, news, scraper_job
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -166,8 +166,20 @@ def get_cb(code: str):
     return {"code": code, "data": cb.get_cb(code)}
 
 
+def _bg_prefetch_kline(codes: list[str]) -> None:
+    """Background: fetch recent kline for stocks that have no cached price data."""
+    today = dt.date.today()
+    start = today - dt.timedelta(days=90)
+    for code in codes:
+        try:
+            kline.get_kline(code, start=start, end=today)
+        except Exception:
+            pass
+
+
 @app.get("/api/overview")
 def get_overview(
+    background_tasks: BackgroundTasks,
     year: str | None = Query(None),
     month: str | None = Query(None),
 ):
@@ -235,6 +247,11 @@ def get_overview(
                     (closes[-1] - closes[-20]) / closes[-20] * 100, 2
                 )
 
+    # Background: quietly prefetch kline for up to 5 stocks missing price data
+    missing = [c for c in codes_list if c not in price_changes]
+    if missing:
+        background_tasks.add_task(_bg_prefetch_kline, missing[:5])
+
     try:
         names.ensure_names()
         name_map = names.get_names(codes_list)
@@ -268,6 +285,19 @@ def get_overview(
         "years": years,
         "months": months,
     }
+
+
+@app.get("/api/news/{code}")
+def get_news(code: str, center: str = Query(..., description="申報日 YYYY-MM-DD")):
+    try:
+        center_date = dt.date.fromisoformat(center)
+    except ValueError:
+        raise HTTPException(400, "Invalid date format")
+    try:
+        news.ensure_news(code, center_date)
+    except finmind.QuotaExhausted as e:
+        raise HTTPException(429, str(e))
+    return {"code": code, "data": news.get_news(code, center_date)}
 
 
 @app.get("/api/quota")

@@ -1,6 +1,7 @@
 export type EventRow = {
   id: number;
   code: string;
+  market: string | null;
   doc_type: string;
   filed_at: string;
   source_month: string | null;
@@ -117,6 +118,13 @@ export type OverviewResponse = {
   months: string[];
 };
 
+export type NewsItem = {
+  published_at: string;
+  title: string | null;
+  source: string | null;
+  link: string | null;
+};
+
 export type ScrapeJob = {
   id: number;
   status: "running" | "success" | "failed";
@@ -159,6 +167,8 @@ export const api = {
     if (params.month) qs.set("month", params.month);
     return j<OverviewResponse>(`/api/overview?${qs}`);
   },
+  news: (code: string, center: string) =>
+    j<{ code: string; data: NewsItem[] }>(`/api/news/${code}?center=${center}`),
   startScrape: (params?: { year?: number; month?: number }) => {
     const qs = new URLSearchParams();
     if (params?.year) qs.set("year", String(params.year));
