@@ -5,12 +5,13 @@ const EMPTY_EVENTS: EventDetail[] = [];
 import { Header } from "@/components/Header";
 import { Sidebar } from "@/components/Sidebar";
 import { Overview } from "@/components/Overview";
+import { RadarPage } from "@/components/RadarPage";
 import { ScrapePage } from "@/components/ScrapePage";
 import { KlineChart, CHIP_LABELS, chartHeightForPanes, type ChipMode } from "@/components/KlineChart";
 import { EventsTable } from "@/components/EventsTable";
 import { CbPanel } from "@/components/CbPanel";
 
-type Tab = "overview" | "detail" | "scrape";
+type Tab = "overview" | "radar" | "detail" | "scrape";
 
 function loadFavorites(): Set<string> {
   try {
@@ -148,6 +149,7 @@ export default function App() {
 
       <div className="flex shrink-0 border-b border-slate-800 px-4">
         {tabBtn("overview", "總覽")}
+        {tabBtn("radar", "CB 雷達")}
         {tabBtn("detail", "詳細分析")}
         {tabBtn("scrape", "爬取")}
       </div>
@@ -155,6 +157,11 @@ export default function App() {
       {/* Overview tab — keep mounted to preserve state */}
       <div className={activeTab === "overview" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
         <Overview events={events} summary={summary} onSelectCode={handleOverviewSelect} />
+      </div>
+
+      {/* Radar tab */}
+      <div className={activeTab === "radar" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+        <RadarPage onSelectCode={handleOverviewSelect} />
       </div>
 
       {/* Scrape tab */}

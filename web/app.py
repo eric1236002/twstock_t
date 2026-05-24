@@ -8,7 +8,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, cb, chip, codes, db, finmind, kline, names, news, scraper_job
+from . import backtest, cb, chip, codes, db, finmind, kline, names, news, radar, scraper_job
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -174,6 +174,12 @@ def get_cb(code: str):
     except Exception:  # noqa: BLE001
         pass
     return {"code": code, "data": cb.get_cb(code)}
+
+
+@app.get("/api/radar")
+def get_radar():
+    """CB 策略雷達:目前符合「近轉換價 × 快到期(× 投信買超)」的個股清單。"""
+    return radar.cb_radar()
 
 
 def _bg_prefetch_kline(codes: list[str]) -> None:

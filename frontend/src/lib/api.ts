@@ -118,6 +118,22 @@ export type OverviewResponse = {
   months: string[];
 };
 
+export type RadarCandidate = {
+  code: string;
+  name: string;
+  as_of: string;
+  close: number;
+  conv_price: number;
+  conv_pos_pct: number;
+  days_to_deadline: number;
+  cb_name: string;
+  trust5_zhang: number | null;
+  short_up: boolean;
+  confirmed: boolean;
+};
+
+export type RadarResponse = { as_of: string | null; candidates: RadarCandidate[] };
+
 export type NewsItem = {
   published_at: string;
   title: string | null;
@@ -169,6 +185,7 @@ export const api = {
   },
   news: (code: string, center: string) =>
     j<{ code: string; data: NewsItem[] }>(`/api/news/${code}?center=${center}`),
+  radar: () => j<RadarResponse>("/api/radar"),
   startScrape: (params?: { year?: number; month?: number }) => {
     const qs = new URLSearchParams();
     if (params?.year) qs.set("year", String(params.year));
