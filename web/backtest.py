@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime as dt
 from bisect import bisect_left
 
-from . import chip, db, kline
+from . import chip, db, finmind, kline
 
 WINDOWS = [1, 5, 20, 60]
 CHIP_WINDOW_DAYS = 5  # ±5 trading days around event
@@ -47,6 +47,17 @@ def event_returns(code: str) -> dict:
     end = min(dt.date.today(), latest + dt.timedelta(days=180))
 
     ohlc = kline.get_kline(code, start=start, end=end)
+
+    # Populate the chip cache for this span so the ±5日 windows below read real
+    # data — the /api/chip endpoint runs in parallel and can't be relied on to
+    # have filled these tables first. ensure_* only fetches missing gaps.
+    # Non-fatal: if the chip fetch fails (e.g. quota), still return price
+    # returns from the cached kline; /api/chip surfaces the error separately.
+    try:
+        chip.ensure_institutional(code, start, end)
+        chip.ensure_margin(code, start, end)
+    except finmind.FinMindError:
+        pass
 
     dates = [r["date"] for r in ohlc]
     opens = [r["open"] for r in ohlc]
