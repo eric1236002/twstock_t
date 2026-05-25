@@ -182,6 +182,17 @@ def get_radar():
     return radar.cb_radar()
 
 
+@app.post("/api/radar/refresh")
+def refresh_radar():
+    """背景更新雷達資料(CB 股的 kline/投信/融券增量補到最新交易日)。"""
+    return radar.start_refresh()
+
+
+@app.get("/api/radar/status")
+def radar_status():
+    return radar.refresh_status()
+
+
 def _bg_prefetch_kline(codes: list[str]) -> None:
     """Background: fetch recent kline for stocks that have no cached price data."""
     today = dt.date.today()

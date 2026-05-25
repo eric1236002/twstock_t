@@ -11,14 +11,19 @@ survivorship. This is a watchlist, not a buy list.
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import threading
 from collections import defaultdict
 
 from . import cb as cb_mod
-from . import db
+from . import chip, db, kline
+
+logger = logging.getLogger(__name__)
 
 BAND = 0.05
 DEADLINE_DAYS = 180
 LB = 5  # trailing trading days for the 投信 / 融券 check
+REFRESH_LOOKBACK_DAYS = 90  # incremental: only the missing tail is actually fetched
 
 
 def _to_date(v) -> dt.date | None:
@@ -107,3 +112,62 @@ def cb_radar() -> dict:
     cands.sort(key=lambda c: (not c["confirmed"], abs(c["conv_pos_pct"])))
     as_of = max((c["as_of"] for c in cands), default=None)
     return {"as_of": as_of, "candidates": cands}
+
+
+# ---- Manual refresh (triggered by the 重新整理 button) ----------------------
+# The radar reads only cached data; this job tops that cache up to the latest
+# trading day. Fetches are incremental (kline/chip ensure_* only request the
+# missing tail), so when data is already current this is nearly free. Runs in a
+# background thread so the request returns immediately; the page polls status.
+
+_state = {"running": False, "done": 0, "total": 0, "last_updated": None, "error": None}
+_lock = threading.Lock()
+
+
+def refresh_status() -> dict:
+    return dict(_state)
+
+
+def _active_cb_stocks() -> list[str]:
+    with db.connect() as conn:
+        return [r["stock_code"] for r in conn.execute(
+            "SELECT DISTINCT stock_code FROM cb "
+            "WHERE listing_status='2' AND conv_price>0 AND COALESCE(outstanding_amount,0)>0"
+        )]
+
+
+def _run_refresh() -> None:
+    try:
+        try:
+            cb_mod.ensure_cb()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("radar refresh: ensure_cb failed: %s", e)
+        codes = _active_cb_stocks()
+        _state["total"] = len(codes)
+        end = dt.date.today()
+        start = end - dt.timedelta(days=REFRESH_LOOKBACK_DAYS)
+        for code in codes:
+            try:
+                kline.get_kline(code, start=start, end=end)
+                chip.ensure_institutional(code, start, end)
+                chip.ensure_margin(code, start, end)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("radar refresh: %s failed: %s", code, e)
+            _state["done"] += 1
+        _state["last_updated"] = dt.datetime.now().isoformat(timespec="seconds")
+        _state["error"] = None
+    except Exception as e:  # noqa: BLE001
+        _state["error"] = str(e)
+        logger.exception("radar refresh failed")
+    finally:
+        _state["running"] = False
+
+
+def start_refresh() -> dict:
+    """Start a background universe refresh if one isn't already running."""
+    with _lock:
+        if _state["running"]:
+            return dict(_state)
+        _state.update(running=True, done=0, total=0, error=None)
+    threading.Thread(target=_run_refresh, name="radar-refresh", daemon=True).start()
+    return dict(_state)

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, type RadarResponse } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type RadarResponse, type RadarStatus } from "@/lib/api";
 
 type Props = { onSelectCode: (code: string) => void };
 
@@ -7,6 +7,8 @@ export function RadarPage({ onSelectCode }: Props) {
   const [data, setData] = useState<RadarResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<RadarStatus | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -18,9 +20,43 @@ export function RadarPage({ onSelectCode }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
+  // 重新整理 = 去抓最新資料(背景),完成後重載清單
+  const refresh = useCallback(() => {
+    if (status?.running) return;
+    setError(null);
+    api
+      .radarRefresh()
+      .then((s) => {
+        setStatus(s);
+        if (pollRef.current) window.clearInterval(pollRef.current);
+        pollRef.current = window.setInterval(async () => {
+          try {
+            const st = await api.radarStatus();
+            setStatus(st);
+            if (!st.running) {
+              if (pollRef.current) window.clearInterval(pollRef.current);
+              pollRef.current = null;
+              if (st.error) setError(st.error);
+              load(); // reload list with freshly-fetched data
+            }
+          } catch (e) {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            setError(String(e));
+          }
+        }, 1500);
+      })
+      .catch((e) => setError(String(e)));
+  }, [status?.running, load]);
+
   useEffect(() => {
-    load();
+    load(); // initial: read current cache only (no fetch)
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    };
   }, [load]);
+
+  const refreshing = !!status?.running;
 
   const cands = data?.candidates ?? [];
   const confirmed = cands.filter((c) => c.confirmed).length;
@@ -31,11 +67,13 @@ export function RadarPage({ onSelectCode }: Props) {
         <div className="flex items-baseline justify-between">
           <h1 className="font-mono text-lg font-semibold text-slate-100">CB 策略雷達</h1>
           <button
-            onClick={load}
-            disabled={loading}
+            onClick={refresh}
+            disabled={refreshing || loading}
             className="rounded border border-slate-700 px-3 py-1 font-mono text-xs text-slate-300 transition hover:bg-slate-800 disabled:opacity-50"
           >
-            {loading ? "更新中…" : "重新整理"}
+            {refreshing
+              ? `更新中… ${status?.done ?? 0}/${status?.total ?? 0}`
+              : "重新整理"}
           </button>
         </div>
 

@@ -134,6 +134,14 @@ export type RadarCandidate = {
 
 export type RadarResponse = { as_of: string | null; candidates: RadarCandidate[] };
 
+export type RadarStatus = {
+  running: boolean;
+  done: number;
+  total: number;
+  last_updated: string | null;
+  error: string | null;
+};
+
 export type NewsItem = {
   published_at: string;
   title: string | null;
@@ -186,6 +194,8 @@ export const api = {
   news: (code: string, center: string) =>
     j<{ code: string; data: NewsItem[] }>(`/api/news/${code}?center=${center}`),
   radar: () => j<RadarResponse>("/api/radar"),
+  radarRefresh: () => j<RadarStatus>("/api/radar/refresh", { method: "POST" }),
+  radarStatus: () => j<RadarStatus>("/api/radar/status"),
   startScrape: (params?: { year?: number; month?: number }) => {
     const qs = new URLSearchParams();
     if (params?.year) qs.set("year", String(params.year));
